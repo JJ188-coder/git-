@@ -291,6 +291,20 @@ func testStorage() throws {
     try expect(try repository.listLectures(courseID: "c1").isEmpty, "course delete cascades")
 }
 
+func testFileBackedStoragePermissions() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paths = AppPaths(root: root)
+    try paths.createDirectories()
+    let repository = try SQLiteLectureRepository(databaseURL: paths.database)
+    try repository.upsertCourse(Course(id: "permissions", name: "Permissions", professor: "Professor"))
+    for file in [paths.database, paths.database.appendingPathExtension("wal"), paths.database.appendingPathExtension("shm")]
+    where FileManager.default.fileExists(atPath: file.path) {
+        let permissions = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
+        try expect(permissions?.intValue == 0o600, "SQLite should create owner-only database and journal files")
+    }
+}
+
 final class FakeRuntime: LectureRuntimeControlling, @unchecked Sendable {
     var snapshot = RuntimeSnapshot(deepSeekConfigured: true)
     func runtimeSnapshot() throws -> RuntimeSnapshot { snapshot }
@@ -341,6 +355,7 @@ let tests: [(String, () async throws -> Void)] = [
     ("domain", { try testDomainModels() }),
     ("app paths", { try testAppPaths() }),
     ("storage", { try testStorage() }),
+    ("storage permissions", { try testFileBackedStoragePermissions() }),
     ("keychain", { try testKeychainStore() }),
     ("chunking", { try testTranscriptChunking() }),
     ("structured parsing", { try testStructuredResponseParsing() }),

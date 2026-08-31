@@ -21,9 +21,14 @@ final class SQLiteDatabase: @unchecked Sendable {
 
     init(url: URL) throws {
         let path = url.lastPathComponent == ":memory:" ? ":memory:" : url.path
+        let previousMask: mode_t?
         if path != ":memory:" {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            previousMask = umask(0o077)
+        } else {
+            previousMask = nil
         }
+        defer { if let previousMask { umask(previousMask) } }
         guard sqlite3_open_v2(path, &handle, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
             throw SQLiteFailure(operation: "open", message: Self.message(handle))
         }
