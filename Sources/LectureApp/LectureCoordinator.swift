@@ -144,7 +144,7 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
         let evidence = try lectures.flatMap { lecture in
             let reviewed = try repository.transcripts(lectureID: lecture.id, source: .reviewedEnglish)
             let source = reviewed.isEmpty ? try repository.transcripts(lectureID: lecture.id, source: .liveEnglish) : reviewed
-            return source.prefix(160).map { GroundingEvidence(id: $0.id, lectureID: lecture.id, lectureTitle: lecture.title, segmentID: $0.id, startTime: $0.startTime, endTime: $0.endTime, text: $0.text) }
+            return GroundingEvidenceFactory.make(lecture: lecture, segments: source)
         }
         let user = ChatMessage(courseID: courseID, lectureID: lectureID, role: .user, text: question); try repository.appendChatMessage(user)
         let answer = try await deepSeek.answer(question: question, evidence: evidence)

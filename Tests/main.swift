@@ -96,6 +96,32 @@ func testTranscriptChunking() throws {
     try expect(chunks.count == 3, "character and time limits should create safe boundaries")
 }
 
+func testGroundingEvidenceKeepsTheWholeLecture() throws {
+    let lecture = LectureRecord(
+        id: "lecture-long",
+        courseID: "course-long",
+        title: "A long lecture",
+        status: .completed
+    )
+    var segments: [TranscriptSegment] = []
+    for index in 0..<240 {
+        let segment = TranscriptSegment(
+            id: "segment-\(index)",
+            lectureID: lecture.id,
+            source: .reviewedEnglish,
+            startTime: Double(index * 5),
+            endTime: Double(index * 5 + 4),
+            text: index == 239 ? "The final theorem appears here." : "Lecture evidence \(index).",
+            isFinal: true
+        )
+        segments.append(segment)
+    }
+
+    let evidence = GroundingEvidenceFactory.make(lecture: lecture, segments: segments)
+    try expect(evidence.count == 240, "grounded Q&A must not discard the end of a long lecture")
+    try expect(evidence.last?.segmentID == "segment-239", "the final lecture segment must remain retrievable")
+}
+
 func testStructuredResponseParsing() throws {
     let summaryJSON = """
     ```json
@@ -464,6 +490,7 @@ let tests: [(String, () async throws -> Void)] = [
     ("storage permissions", { try testFileBackedStoragePermissions() }),
     ("keychain", { try testKeychainStore() }),
     ("chunking", { try testTranscriptChunking() }),
+    ("whole-lecture grounding evidence", { try testGroundingEvidenceKeepsTheWholeLecture() }),
     ("structured parsing", { try testStructuredResponseParsing() }),
     ("DeepSeek request and redaction", testDeepSeekRequestShapeAndRedaction),
     ("DeepSeek workflows", testDeepSeekWorkflows),

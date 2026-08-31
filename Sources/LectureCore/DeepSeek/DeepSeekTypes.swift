@@ -70,6 +70,25 @@ public struct GroundingEvidence: Codable, Hashable, Sendable {
     }
 }
 
+public enum GroundingEvidenceFactory {
+    public static func make(
+        lecture: LectureRecord,
+        segments: [TranscriptSegment]
+    ) -> [GroundingEvidence] {
+        segments.filter(\.isFinal).map { segment in
+            GroundingEvidence(
+                id: segment.id,
+                lectureID: lecture.id,
+                lectureTitle: lecture.title,
+                segmentID: segment.id,
+                startTime: segment.startTime,
+                endTime: segment.endTime,
+                text: segment.text
+            )
+        }
+    }
+}
+
 public struct GroundedAnswer: Codable, Sendable {
     public var text: String
     public var citations: [Citation]
