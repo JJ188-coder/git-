@@ -396,6 +396,15 @@ func testWebSecurityContract() throws {
         buildScript.contains(#"designated => identifier "com.jiyuanyi.Lecture""#),
         "packaged builds must keep a stable designated requirement so macOS permissions survive updates"
     )
+
+    let coordinatorSource = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/LectureApp/LectureCoordinator.swift"),
+        encoding: .utf8
+    )
+    try expect(
+        coordinatorSource.contains("catch {\n            withState { statusMessageValue = SecretRedactor.redact(String(describing: error)) }\n            throw error\n        }"),
+        "failed classroom startup should replace transient progress text with the safe actionable error"
+    )
 }
 
 let tests: [(String, () async throws -> Void)] = [

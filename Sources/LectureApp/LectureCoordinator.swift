@@ -57,36 +57,41 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
         }
         guard canStart else { throw CoordinatorError.alreadyRecording }
         defer { withState { operationInProgress = false } }
-        withState { statusMessageValue = "正在检查麦克风与语音识别权限…" }
-        try await LecturePermissionAuthorizer().authorize()
-        guard let course = try repository.course(id: courseID) else { throw CoordinatorError.missingCourse }
-        try ensureRecordingCapacity()
-        withState { statusMessageValue = "正在准备本地英语识别资源…" }
-        let speechLocale = try await SpeechAssetManager.ensureInstalled(
-            identifier: course.speechLocaleIdentifier
-        )
-        withState { speechAvailableValue = true }
-        var lecture = LectureRecord(courseID: courseID, title: title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? defaultTitle(), status: .recording)
-        let audioURL = paths.audioURL(lectureID: lecture.id)
-        lecture.audioPath = audioURL.path; try repository.upsertLecture(lecture)
-        let liveSpeech = LiveSpeechTranscriber(vocabulary: course.vocabulary, locale: speechLocale)
-        withState { activeLecture = lecture; activeCourse = course; speech = liveSpeech; durationValue = 0; volatileEnglishValue = ""; volatileChineseValue = ""; statusMessageValue = "本地录音与英文识别正在运行" }
         do {
-            try await liveSpeech.start(lectureID: lecture.id, audioFormat: recorder.inputFormat) { [weak self] update in self?.receive(update) }
-            try recorder.start(
-                url: audioURL,
-                onBuffer: { [weak liveSpeech] buffer in liveSpeech?.append(buffer) },
-                onLevel: { [weak self] level in self?.setAudioLevel(level.normalized) },
-                onCheckpoint: { [weak self] checkpoint in self?.persistCheckpoint(checkpoint) },
-                onError: { [weak self] error in
-                    guard let self else { return }
-                    self.withState { self.statusMessageValue = "录音写入警告：\(error)" }
-                }
+            withState { statusMessageValue = "正在检查麦克风与语音识别权限…" }
+            try await LecturePermissionAuthorizer().authorize()
+            guard let course = try repository.course(id: courseID) else { throw CoordinatorError.missingCourse }
+            try ensureRecordingCapacity()
+            withState { statusMessageValue = "正在准备本地英语识别资源…" }
+            let speechLocale = try await SpeechAssetManager.ensureInstalled(
+                identifier: course.speechLocaleIdentifier
             )
+            withState { speechAvailableValue = true }
+            var lecture = LectureRecord(courseID: courseID, title: title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? defaultTitle(), status: .recording)
+            let audioURL = paths.audioURL(lectureID: lecture.id)
+            lecture.audioPath = audioURL.path; try repository.upsertLecture(lecture)
+            let liveSpeech = LiveSpeechTranscriber(vocabulary: course.vocabulary, locale: speechLocale)
+            withState { activeLecture = lecture; activeCourse = course; speech = liveSpeech; durationValue = 0; volatileEnglishValue = ""; volatileChineseValue = ""; statusMessageValue = "本地录音与英文识别正在运行" }
+            do {
+                try await liveSpeech.start(lectureID: lecture.id, audioFormat: recorder.inputFormat) { [weak self] update in self?.receive(update) }
+                try recorder.start(
+                    url: audioURL,
+                    onBuffer: { [weak liveSpeech] buffer in liveSpeech?.append(buffer) },
+                    onLevel: { [weak self] level in self?.setAudioLevel(level.normalized) },
+                    onCheckpoint: { [weak self] checkpoint in self?.persistCheckpoint(checkpoint) },
+                    onError: { [weak self] error in
+                        guard let self else { return }
+                        self.withState { self.statusMessageValue = "录音写入警告：\(error)" }
+                    }
+                )
+            } catch {
+                await liveSpeech.cancel(); try? repository.deleteLecture(id: lecture.id); clearActive(); throw error
+            }
+            return lecture
         } catch {
-            await liveSpeech.cancel(); try? repository.deleteLecture(id: lecture.id); clearActive(); throw error
+            withState { statusMessageValue = SecretRedactor.redact(String(describing: error)) }
+            throw error
         }
-        return lecture
     }
 
     func stopLecture() async throws -> LectureRecord {
