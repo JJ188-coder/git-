@@ -12,6 +12,7 @@ final class Runtime: LectureRuntimeControlling, @unchecked Sendable {
     func saveDeepSeekKey(_ key: String) async throws {}
     func deleteDeepSeekKey() throws {}
     func testDeepSeek() async throws -> Bool { true }
+    func isDeepSeekConfigured() -> Bool { true }
 }
 
 let root = URL(fileURLWithPath: CommandLine.arguments[1])
