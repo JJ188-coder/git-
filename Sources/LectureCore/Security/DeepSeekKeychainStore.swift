@@ -46,6 +46,14 @@ public struct DeepSeekKeychainStore: DeepSeekAPIKeyProviding, Sendable {
         return value
     }
 
+    /// Checks only for a matching Keychain item reference. This avoids decrypting
+    /// the secret and keeps app launch responsive while the Mac is locked.
+    public func hasAPIKeyReference() -> Bool {
+        var query = baseQuery
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
     public func deleteAPIKey() throws {
         let status = SecItemDelete(baseQuery as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.status(status) }

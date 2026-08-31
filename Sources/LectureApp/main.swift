@@ -37,7 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let repository = try SQLiteLectureRepository(databaseURL: paths.database)
             try paths.createDirectories()
             recoverInterruptedLectures(repository)
-            let coordinator = LectureCoordinator(repository: repository, paths: paths)
+            let coordinator = LectureCoordinator(
+                repository: repository,
+                paths: paths,
+                deepSeekConfigured: DeepSeekKeychainStore().hasAPIKeyReference()
+            )
             let resourceRoot = Bundle.module.resourceURL ?? Bundle.module.bundleURL
             let server = LoopbackHTTPServer { token in
                 LectureAPIRouter(repository: repository, runtime: coordinator, token: token, resourcesRoot: resourceRoot)

@@ -25,9 +25,9 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
     private var translationAvailableValue = false
     private var deepSeekConfiguredValue = false
 
-    init(repository: LectureRepository, paths: AppPaths) {
+    init(repository: LectureRepository, paths: AppPaths, deepSeekConfigured: Bool = false) {
         self.repository = repository; self.paths = paths; deepSeek = DeepSeekClient(keyProvider: keychain)
-        deepSeekConfiguredValue = (try? keychain.loadAPIKey()) != nil
+        deepSeekConfiguredValue = deepSeekConfigured
         Task { [weak self] in
             guard let self else { return }
             let speechAvailable = (try? await SpeechAssetManager.resolvedLocale()) != nil

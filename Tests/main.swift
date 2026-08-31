@@ -64,12 +64,15 @@ func testKeychainStore() throws {
     defer { try? store.deleteAPIKey() }
 
     try expect(try store.loadAPIKey() == nil, "isolated Keychain service should start empty")
+    try expect(!store.hasAPIKeyReference(), "missing key should have no item reference")
     try store.saveAPIKey("  sk-test-first-value-123456  ")
     try expect(try store.loadAPIKey() == "sk-test-first-value-123456", "Keychain should trim and load the saved key")
+    try expect(store.hasAPIKeyReference(), "saved key should have an item reference")
     try store.saveAPIKey("sk-test-replacement-value-654321")
     try expect(try store.loadAPIKey() == "sk-test-replacement-value-654321", "Keychain save should replace the existing key")
     try store.deleteAPIKey()
     try expect(try store.loadAPIKey() == nil, "Keychain delete should remove the key")
+    try expect(!store.hasAPIKeyReference(), "deleted key should remove its item reference")
 }
 
 func testTranscriptChunking() throws {
