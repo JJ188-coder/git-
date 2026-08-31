@@ -94,6 +94,22 @@ public func testLecturePermissions() async throws {
     }
 }
 
+public func testRecordingFilePermissions() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let audioURL = root.appendingPathComponent("private-recording.m4a")
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data([0, 1, 2, 3]).write(to: audioURL)
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: audioURL.path)
+
+    try MicrophoneRecorder.protectRecording(at: audioURL)
+
+    let permissions = try FileManager.default.attributesOfItem(atPath: audioURL.path)[.posixPermissions] as? NSNumber
+    try speechExpect(permissions?.intValue == 0o600, "recordings should be readable only by the current user")
+}
+
 @available(macOS 26.0, *)
 private func testCustomVocabularyFingerprint() throws {
     let first = CustomVocabularyModel.fingerprint(

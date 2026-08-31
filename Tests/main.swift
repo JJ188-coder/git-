@@ -383,6 +383,7 @@ let tests: [(String, () async throws -> Void)] = [
     ("web security contract", { try testWebSecurityContract() }),
     ("native speech helpers", { try testLectureSpeech() }),
     ("native permission timeout", testLecturePermissions),
+    ("recording permissions", { try testRecordingFilePermissions() }),
 ]
 
 Task {

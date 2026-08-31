@@ -24,6 +24,13 @@ public final class MicrophoneRecorder: @unchecked Sendable {
     public var duration: TimeInterval { startedAt.map { Date().timeIntervalSince($0) } ?? 0 }
     public var inputFormat: AVAudioFormat { engine.inputNode.inputFormat(forBus: 0) }
 
+    public static func protectRecording(
+        at url: URL,
+        fileManager: FileManager = .default
+    ) throws {
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
     public static func requestPermission() async -> Bool {
         if #available(macOS 14.0, *) { return await AVAudioApplication.requestRecordPermission() }
         return await withCheckedContinuation { continuation in AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) } }
@@ -55,6 +62,7 @@ public final class MicrophoneRecorder: @unchecked Sendable {
             commonFormat: format.commonFormat,
             interleaved: format.isInterleaved
         )
+        try Self.protectRecording(at: url)
         bufferHandler = onBuffer; levelHandler = onLevel
         checkpointHandler = onCheckpoint
         errorHandler = onError
