@@ -21,22 +21,46 @@ public final class DeepSeekClient: @unchecked Sendable {
     public func correctTranslation(englishSegments: [TranscriptSegment], vocabulary: [String]) async throws -> [TranscriptSegment] {
         struct Translation: Decodable { let unitID: String; let chinese: String }
         struct Result: Decodable { let translations: [Translation] }
+        guard englishSegments.contains(where: \.isFinal) else { throw DeepSeekError.missingTranscript }
         var output: [TranscriptSegment] = []
         for chunk in DeepSeekTranscriptChunker.chunks(from: englishSegments) {
             let input = try jsonString(chunk.units)
             let raw = try await complete(system: "Translate university lecture English into accurate Simplified Chinese. Preserve every unitID. Return only JSON: {\"translations\":[{\"unitID\":\"...\",\"chinese\":\"...\"}]}. Course vocabulary: \(vocabulary.joined(separator: ", "))", user: input)
             let parsed: Result = try DeepSeekResponseParser.decodeJSON(Result.self, from: raw)
             let byID = Dictionary(uniqueKeysWithValues: chunk.units.map { ($0.id, $0) })
+            var translatedByUnitID: [String: String] = [:]
             for value in parsed.translations {
-                let source = byID[value.unitID] ?? chunk.units.first(where: { $0.sourceSegmentID == value.unitID })
-                guard let source else { continue }
-                output.append(.init(lectureID: englishSegments.first?.lectureID ?? "", source: .correctedChinese, startTime: source.startTime, endTime: source.endTime, text: value.chinese, isFinal: true, sourceSegmentID: source.sourceSegmentID))
+                guard byID[value.unitID] != nil, translatedByUnitID[value.unitID] == nil else {
+                    throw DeepSeekError.invalidResponse("翻译单元 ID 无效或重复")
+                }
+                let chinese = value.chinese.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !chinese.isEmpty else { throw DeepSeekError.invalidResponse("翻译内容为空") }
+                translatedByUnitID[value.unitID] = chinese
+            }
+            guard translatedByUnitID.count == chunk.units.count else {
+                throw DeepSeekError.invalidResponse("翻译结果缺少部分逐字稿单元")
+            }
+            for unit in chunk.units {
+                guard let chinese = translatedByUnitID[unit.id] else {
+                    throw DeepSeekError.invalidResponse("翻译结果缺少逐字稿单元 \(unit.id)")
+                }
+                output.append(.init(
+                    id: "deepseek-zh-\(unit.id)",
+                    lectureID: englishSegments.first?.lectureID ?? "",
+                    source: .correctedChinese,
+                    startTime: unit.startTime,
+                    endTime: unit.endTime,
+                    text: chinese,
+                    isFinal: true,
+                    sourceSegmentID: unit.sourceSegmentID
+                ))
             }
         }
         return output
     }
 
     public func generateStudySummary(lectureTitle: String, transcript: [TranscriptSegment]) async throws -> StudySummary {
+        guard transcript.contains(where: \.isFinal) else { throw DeepSeekError.missingTranscript }
         let chunks = DeepSeekTranscriptChunker.chunks(from: transcript)
         if chunks.count <= 1 {
             let text = transcript.map { "[\(format($0.startTime))] \($0.text)" }.joined(separator: "\n")

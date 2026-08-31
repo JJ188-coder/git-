@@ -78,12 +78,14 @@ public struct GroundedAnswer: Codable, Sendable {
 
 public enum DeepSeekError: Error, CustomStringConvertible {
     case missingAPIKey
+    case missingTranscript
     case invalidResponse(String)
     case http(Int, String)
     case unsupportedCitation(String)
     public var description: String {
         switch self {
         case .missingAPIKey: return "请先在设置中保存 DeepSeek API Key"
+        case .missingTranscript: return "没有可用于课后处理的英文逐字稿"
         case .invalidResponse(let message): return "DeepSeek 返回格式异常：" + SecretRedactor.redact(message)
         case .http(let code, let message): return "DeepSeek 请求失败（\(code)）：" + SecretRedactor.redact(message)
         case .unsupportedCitation(let id): return "DeepSeek 返回了不存在的引用：" + id

@@ -261,7 +261,7 @@ func testDeepSeekRequestShapeAndRedaction() async throws {
 func testDeepSeekWorkflows() async throws {
     StubURLProtocol.reset()
     let summary = #"{"overview":"Utility maximization","coreConcepts":["MRS"],"definitions":[],"professorExamples":[],"professorEmphasis":[],"possibleExamTopics":[],"unresolvedQuestions":[],"glossary":[] }"#
-    StubURLProtocol.enqueue(body: try completionEnvelope(content: #"{"translations":[{"unitID":"seg-1","chinese":"边际替代率递减。"}]}"#))
+    StubURLProtocol.enqueue(body: try completionEnvelope(content: #"{"translations":[{"unitID":"seg-1-0","chinese":"边际替代率递减。"}]}"#))
     StubURLProtocol.enqueue(body: try completionEnvelope(content: summary))
     StubURLProtocol.enqueue(body: try completionEnvelope(content: #"{"answer":"教授说边际替代率沿凸无差异曲线递减。","foundEvidence":true,"citedEvidenceIDs":["ev-1"]}"#))
 
@@ -278,6 +278,56 @@ func testDeepSeekWorkflows() async throws {
     let answer = try await client.answer(question: "教授如何解释 MRS？", evidence: evidence)
     try expect(answer.citations.first?.startTime == 10, "Q&A should return a playable local timestamp citation")
     try expect(StubURLProtocol.requests().count == 3, "each workflow should make one focused request for a short transcript")
+}
+
+func testDeepSeekTranslationRetrySafety() async throws {
+    StubURLProtocol.reset()
+    let response = try completionEnvelope(
+        content: #"{"translations":[{"unitID":"seg-retry-0","chinese":"重试后仍是同一段。"}]}"#
+    )
+    StubURLProtocol.enqueue(body: response)
+    StubURLProtocol.enqueue(body: response)
+    let client = DeepSeekClient(
+        keyProvider: StaticAPIKeyProvider(value: "sk-test-retry-safety-1234567890"),
+        session: makeStubbedSession()
+    )
+    let segment = TranscriptSegment(
+        id: "seg-retry",
+        lectureID: "lecture-retry",
+        source: .reviewedEnglish,
+        startTime: 1,
+        endTime: 4,
+        text: "Retrying must not duplicate corrected translations.",
+        isFinal: true
+    )
+
+    let first = try await client.correctTranslation(englishSegments: [segment], vocabulary: [])
+    let second = try await client.correctTranslation(englishSegments: [segment], vocabulary: [])
+    try expect(first.map(\.id) == second.map(\.id), "translation retries must reuse stable transcript identifiers")
+
+    StubURLProtocol.reset()
+    StubURLProtocol.enqueue(body: try completionEnvelope(content: #"{"translations":[]}"#))
+    do {
+        _ = try await client.correctTranslation(englishSegments: [segment], vocabulary: [])
+        throw TestFailure(description: "missing translation units must fail the corrected transcript")
+    } catch is DeepSeekError {
+        // Expected: partial AI output must not hide otherwise usable live Chinese.
+    }
+}
+
+func testDeepSeekRejectsEmptySummaryInput() async throws {
+    StubURLProtocol.reset()
+    let client = DeepSeekClient(
+        keyProvider: StaticAPIKeyProvider(value: "sk-test-empty-summary-1234567890"),
+        session: makeStubbedSession()
+    )
+    do {
+        _ = try await client.generateStudySummary(lectureTitle: "Silent class", transcript: [])
+        throw TestFailure(description: "empty transcripts must not produce an AI summary")
+    } catch is DeepSeekError {
+        // Expected: no transcript means there is no evidence to summarize.
+    }
+    try expect(StubURLProtocol.requests().isEmpty, "empty transcripts must be rejected before any network request")
 }
 
 func testStorage() throws {
@@ -417,6 +467,8 @@ let tests: [(String, () async throws -> Void)] = [
     ("structured parsing", { try testStructuredResponseParsing() }),
     ("DeepSeek request and redaction", testDeepSeekRequestShapeAndRedaction),
     ("DeepSeek workflows", testDeepSeekWorkflows),
+    ("DeepSeek translation retry safety", testDeepSeekTranslationRetrySafety),
+    ("DeepSeek empty summary safety", testDeepSeekRejectsEmptySummaryInput),
     ("server router", testServerRouter),
     ("web security contract", { try testWebSecurityContract() }),
     ("native speech helpers", { try testLectureSpeech() }),
