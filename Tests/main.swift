@@ -47,6 +47,14 @@ func testAppPaths() throws {
         let permissions = try FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber
         try expect(permissions?.intValue == 0o700, "private app directory should use owner-only permissions")
     }
+    try Data().write(to: paths.database)
+    try Data().write(to: paths.database.appendingPathExtension("wal"))
+    try Data().write(to: paths.database.appendingPathExtension("shm"))
+    try paths.createDirectories()
+    for file in [paths.database, paths.database.appendingPathExtension("wal"), paths.database.appendingPathExtension("shm")] {
+        let permissions = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
+        try expect(permissions?.intValue == 0o600, "database files should use owner-only permissions")
+    }
     try expect(paths.audioURL(lectureID: "unsafe/id").lastPathComponent == "unsafe-id.m4a", "recording paths should sanitize identifiers")
 }
 

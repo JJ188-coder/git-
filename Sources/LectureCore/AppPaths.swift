@@ -33,6 +33,10 @@ public struct AppPaths: Sendable {
         try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: exports.path)
         try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: working.path)
         try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: speechModels.path)
+        for url in [database, database.appendingPathExtension("wal"), database.appendingPathExtension("shm")]
+        where fileManager.fileExists(atPath: url.path) {
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
     }
 
     public func audioURL(lectureID: String, fileExtension: String = "m4a") -> URL {

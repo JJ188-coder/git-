@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let paths = AppPaths.live
             try paths.createDirectories()
             let repository = try SQLiteLectureRepository(databaseURL: paths.database)
+            try paths.createDirectories()
             recoverInterruptedLectures(repository)
             let coordinator = LectureCoordinator(repository: repository, paths: paths)
             let resourceRoot = Bundle.module.resourceURL ?? Bundle.module.bundleURL
