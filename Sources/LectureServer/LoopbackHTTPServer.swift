@@ -90,7 +90,7 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
     }
 
     private static func serialize(_ response: HTTPResponse) -> Data {
-        let reason: String = [200: "OK", 201: "Created", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found", 409: "Conflict", 500: "Internal Server Error"][response.status] ?? "OK"
+        let reason: String = [200: "OK", 201: "Created", 206: "Partial Content", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found", 409: "Conflict", 416: "Range Not Satisfiable", 500: "Internal Server Error"][response.status] ?? "OK"
         var headers = response.headers
         headers["Content-Length"] = String(response.body.count)
         headers["Connection"] = "close"

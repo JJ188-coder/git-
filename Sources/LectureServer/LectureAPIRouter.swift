@@ -182,7 +182,16 @@ public final class LectureAPIRouter: @unchecked Sendable {
                 case "wav": mime = "audio/wav"
                 default: mime = "application/octet-stream"
                 }
-                return HTTPResponse(status: 200, headers: ["Content-Type": mime], body: data)
+                var headers = ["Content-Type": mime, "Accept-Ranges": "bytes"]
+                if let rangeHeader = request.headers["range"] {
+                    guard let range = byteRange(from: rangeHeader, totalLength: data.count) else {
+                        headers["Content-Range"] = "bytes */\(data.count)"
+                        return HTTPResponse(status: 416, headers: headers)
+                    }
+                    headers["Content-Range"] = "bytes \(range.lowerBound)-\(range.upperBound - 1)/\(data.count)"
+                    return HTTPResponse(status: 206, headers: headers, body: data.subdata(in: range))
+                }
+                return HTTPResponse(status: 200, headers: headers, body: data)
             }
         }
         if parts.count == 4, parts[0] == "api", parts[1] == "courses", parts[3] == "chat", request.method == "GET" {
@@ -194,6 +203,27 @@ public final class LectureAPIRouter: @unchecked Sendable {
     private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do { return try LectureJSON.decoder.decode(type, from: data) }
         catch { throw RouterError.invalidBody }
+    }
+
+    private func byteRange(from header: String, totalLength: Int) -> Range<Int>? {
+        guard totalLength > 0, header.lowercased().hasPrefix("bytes=") else { return nil }
+        let value = header.dropFirst(6).trimmingCharacters(in: .whitespaces)
+        guard !value.contains(",") else { return nil }
+        let parts = value.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        if parts[0].isEmpty {
+            guard let suffixLength = Int(parts[1]), suffixLength > 0 else { return nil }
+            let length = min(suffixLength, totalLength)
+            return (totalLength - length)..<totalLength
+        }
+        guard let start = Int(parts[0]), start >= 0, start < totalLength else { return nil }
+        let end: Int
+        if parts[1].isEmpty { end = totalLength - 1 }
+        else {
+            guard let requestedEnd = Int(parts[1]), requestedEnd >= start else { return nil }
+            end = min(requestedEnd, totalLength - 1)
+        }
+        return start..<(end + 1)
     }
 
     private func serveStatic(_ path: String) -> HTTPResponse {

@@ -7,7 +7,7 @@
     route: location.hash.slice(1) || "live",
     courses: [], lectures: [], currentCourseID: null, currentLectureID: null,
     runtime: { recording: false, duration: 0, audioLevel: 0, volatileEnglish: "", volatileChinese: "", deepSeekConfigured: false },
-    detail: null, chat: [], qaScope: "course", connected: false
+    detail: null, chat: [], qaScope: "course", connected: false, pendingAudioTime: null
   };
   const main = document.getElementById("app-main");
   const breadcrumb = document.getElementById("breadcrumb");
@@ -52,7 +52,8 @@
   function setRoute(route) {
     state.route = route;
     if (route === "qa" && !state.currentLectureID) state.qaScope = "course";
-    location.hash = route;
+    const targetHash = `#${route}`;
+    if (location.hash !== targetHash) { location.hash = route; return; }
     render();
   }
   function syncNav() { document.querySelectorAll("[data-route]").forEach(node => { const active = node.dataset.route === state.route; node.classList.toggle("is-active", active); active ? node.setAttribute("aria-current", "page") : node.removeAttribute("aria-current"); }); }
@@ -126,6 +127,17 @@
       <section class="quality-panel"><div><span class="eyebrow">RECOGNITION QUALITY</span><h2>识别质量证据</h2><p>这是 Apple 识别器给出的可信度，不等同于真实准确率；红色片段仍应点击回听。</p></div><div class="quality-cards">${qualityCard("实时确认稿", liveQuality)}${qualityCard("课后复核稿", reviewedQuality)}</div></section>
       <div class="detail-grid"><article class="paper transcript-paper"><header><span class="mono-label">${reviewed.length ? "REVIEWED ENGLISH" : "LIVE ENGLISH"}</span><span>${english.filter(s => s.confidence != null && s.confidence < .55).length} 处待复核</span></header>${english.map(s => `<button class="detail-segment" data-time="${s.startTime}"><time>${fmt(s.startTime)}</time><p>${escapeHTML(s.text)}</p></button>`).join("") || `<p class="list-empty">尚无英文逐字稿。</p>`}</article><article class="paper transcript-paper chinese"><header><span class="mono-label">${corrected.length ? "DEEPSEEK CORRECTED" : "LIVE CHINESE"}</span></header>${zh.map(s => `<div class="detail-segment"><time>${fmt(s.startTime)}</time><p>${escapeHTML(s.text)}</p></div>`).join("") || `<p class="list-empty">尚无中文翻译。</p>`}</article></div>
       <section class="marker-strip"><span class="mono-label">MARKERS</span>${markers.map(m => `<button data-time="${m.time}">${fmt(m.time)} · ${escapeHTML(m.label)}</button>`).join("") || "没有课堂标记"}</section>${summaries[0] ? `<section class="summary-preview"><span class="eyebrow">LATEST SUMMARY</span><h2>最新学习总结</h2><p>${escapeHTML(summaries[0].content.overview)}</p>${button("打开完整总结", "open-summary", "button-primary")}</section>` : ""}</section>`;
+    applyPendingAudioJump();
+  }
+
+  function applyPendingAudioJump() {
+    if (state.pendingAudioTime == null) return;
+    const audio = document.getElementById("audio");
+    if (!audio) return;
+    const target = Math.max(0, Number(state.pendingAudioTime) || 0);
+    const seek = () => { audio.currentTime = target; state.pendingAudioTime = null; audio.play().catch(() => {}); };
+    if (audio.readyState >= 1) seek();
+    else audio.addEventListener("loadedmetadata", seek, { once: true });
   }
 
   async function renderSummary() {
@@ -217,13 +229,15 @@
     if (act) action(act, actionNode);
     const timed = event.target.closest("[data-time]");
     if (!timed) return;
-    if (timed.dataset.lecture && timed.dataset.lecture !== state.currentLectureID) {
-      state.currentLectureID = timed.dataset.lecture;
+    const targetLectureID = timed.dataset.lecture;
+    const requiresLectureChange = Boolean(targetLectureID && targetLectureID !== state.currentLectureID);
+    state.pendingAudioTime = Number(timed.dataset.time);
+    if (targetLectureID) state.currentLectureID = targetLectureID;
+    if (state.route !== "detail" || requiresLectureChange) {
       setRoute("detail");
       return;
     }
-    const audio = document.getElementById("audio");
-    if (audio) { audio.currentTime = Number(timed.dataset.time); audio.play(); }
+    applyPendingAudioJump();
   });
   document.querySelectorAll("[data-close-dialog]").forEach(b => b.addEventListener("click", () => b.closest("dialog").close()));
   document.getElementById("course-form").addEventListener("submit", saveCourse);

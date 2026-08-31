@@ -439,6 +439,20 @@ func testServerRouter() async throws {
     try repository.upsertLecture(LectureRecord(id: "audio-lecture", courseID: course.id, title: "Audio", status: .completed, audioPath: m4a.path))
     let audio = await router.handle(HTTPRequest(method: "GET", path: "/api/lectures/audio-lecture/audio", headers: ["x-lecture-token": "secret-token"]))
     try expect(audio.status == 200 && audio.headers["Content-Type"] == "audio/mp4", "m4a recording should use a browser-playable MIME type")
+    try expect(audio.headers["Accept-Ranges"] == "bytes", "full recording responses should advertise byte seeking")
+    let audioRange = await router.handle(HTTPRequest(
+        method: "GET",
+        path: "/api/lectures/audio-lecture/audio",
+        headers: ["x-lecture-token": "secret-token", "range": "bytes=1-2"]
+    ))
+    try expect(audioRange.status == 206 && audioRange.body == Data([1, 2]), "audio byte ranges should return only the requested media bytes")
+    try expect(audioRange.headers["Content-Range"] == "bytes 1-2/4", "partial audio should report its exact content range")
+    let invalidAudioRange = await router.handle(HTTPRequest(
+        method: "GET",
+        path: "/api/lectures/audio-lecture/audio",
+        headers: ["x-lecture-token": "secret-token", "range": "bytes=9-10"]
+    ))
+    try expect(invalidAudioRange.status == 416 && invalidAudioRange.headers["Content-Range"] == "bytes */4", "unsatisfiable audio ranges should be explicit")
 
     let runtime = FakeRuntime()
     runtime.snapshot.activeLectureID = "audio-lecture"
@@ -463,6 +477,22 @@ func testWebSecurityContract() throws {
     try expect(appJavaScript.contains("<progress"), "microphone level should use a CSP-safe native progress value")
     try expect(appJavaScript.contains("正在准备…"), "long-running start should show visible progress")
     try expect(appJavaScript.contains("control.disabled = true"), "long-running controls should prevent duplicate requests")
+    try expect(
+        appJavaScript.contains("pendingAudioTime") && appJavaScript.contains("applyPendingAudioJump()"),
+        "Q&A citations should carry their timestamp into the lecture audio player"
+    )
+    try expect(
+        appJavaScript.contains("requiresLectureChange") && appJavaScript.contains(#"state.route !== "detail""#),
+        "citation clicks outside lecture detail should open the referenced lecture before seeking"
+    )
+    try expect(
+        appJavaScript.contains("const targetHash = `#${route}`") && appJavaScript.contains("if (location.hash !== targetHash)"),
+        "route changes should render once through hashchange instead of racing duplicate detail renders"
+    )
+    try expect(
+        appJavaScript.contains("state.pendingAudioTime = null; audio.play()"),
+        "pending citation time should clear only after the audio element is ready to seek"
+    )
 
     let buildScript = try String(
         contentsOf: projectRoot.appendingPathComponent("scripts/build-app.sh"),
