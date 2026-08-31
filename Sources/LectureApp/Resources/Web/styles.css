@@ -3131,3 +3131,17 @@ button.marker-row {
   .quality-panel,
   .accuracy-guide { padding: 20px; }
 }
+
+@media (max-width: 860px) {
+  body {
+    padding-bottom: calc(86px + env(safe-area-inset-bottom));
+  }
+
+  #app-main {
+    padding-bottom: 96px;
+  }
+
+  .mobile-nav {
+    height: calc(64px + env(safe-area-inset-bottom));
+  }
+}
