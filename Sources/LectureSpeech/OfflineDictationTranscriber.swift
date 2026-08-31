@@ -5,9 +5,14 @@ import Speech
 
 @available(macOS 26.0, *)
 public enum OfflineDictationTranscriber {
-    public static func makeDictationPreset() -> DictationTranscriber.Preset {
+    public static func makeDictationPreset(
+        customLanguageModel: SFSpeechLanguageModel.Configuration? = nil
+    ) -> DictationTranscriber.Preset {
         var preset = DictationTranscriber.Preset.timeIndexedLongDictation
         preset.contentHints.insert(.farField)
+        if let customLanguageModel {
+            preset.contentHints.insert(.customizedLanguage(modelConfiguration: customLanguageModel))
+        }
         preset.transcriptionOptions.insert(.punctuation)
         preset.reportingOptions.remove(.volatileResults)
         preset.reportingOptions.insert(.alternativeTranscriptions)
@@ -19,19 +24,39 @@ public enum OfflineDictationTranscriber {
     }
 
     public static func makeDictationTranscriber(
-        locale: Locale = Locale(identifier: "en-US")
+        locale: Locale = Locale(identifier: "en-US"),
+        customLanguageModel: SFSpeechLanguageModel.Configuration? = nil
     ) -> DictationTranscriber {
-        DictationTranscriber(locale: locale, preset: makeDictationPreset())
+        DictationTranscriber(
+            locale: locale,
+            preset: makeDictationPreset(customLanguageModel: customLanguageModel)
+        )
     }
 
     public static func review(
         audioURL: URL,
         lectureID: String,
         vocabulary: [String],
-        locale: Locale = Locale(identifier: "en-US")
+        locale: Locale = Locale(identifier: "en-US"),
+        customModelRoot: URL? = nil
     ) async throws -> [TranscriptSegment] {
         let audioFile = try AVAudioFile(forReading: audioURL)
-        let transcriber = makeDictationTranscriber(locale: locale)
+        let customLanguageModel: SFSpeechLanguageModel.Configuration?
+        if let customModelRoot {
+            // A broken custom model must never cost the user the entire reviewed
+            // transcript; the normal on-device dictation model remains the fallback.
+            customLanguageModel = try? await CustomVocabularyModel.configuration(
+                vocabulary: vocabulary,
+                locale: locale,
+                root: customModelRoot
+            )
+        } else {
+            customLanguageModel = nil
+        }
+        let transcriber = makeDictationTranscriber(
+            locale: locale,
+            customLanguageModel: customLanguageModel
+        )
         let analyzer = SpeechAnalyzer(
             modules: [transcriber],
             options: .init(priority: .utility, modelRetention: .whileInUse)

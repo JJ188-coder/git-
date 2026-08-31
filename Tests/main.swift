@@ -24,6 +24,9 @@ func testDomainModels() throws {
     try expect(!segment.isLowConfidence, "0.82 should not be low confidence")
     let low = TranscriptSegment(id: "s", lectureID: "l", source: .liveEnglish, startTime: 0, endTime: 1, text: "uncertain", confidence: 0.54, isFinal: true)
     try expect(low.isLowConfidence, "0.54 should be low confidence")
+    let quality = TranscriptQuality(segments: [segment, low])
+    try expect(quality.segmentCount == 2 && quality.scoredSegmentCount == 2, "quality should count final scored segments")
+    try expect(quality.lowConfidenceCount == 1 && quality.lowConfidenceRate == 0.5, "quality should expose low-confidence rate")
     try expect(LectureStatus.recording.canTransition(to: .reviewingEnglish), "recording should transition to review")
     try expect(!LectureStatus.completed.canTransition(to: .recording), "completed must not restart")
     try expect(LectureStatus.completed.canTransition(to: .processingDeepSeek), "completed local transcripts should allow later DeepSeek enrichment")
@@ -33,6 +36,18 @@ func testDomainModels() throws {
     try expect(!strict.contains("not-prefixed-secret-value"), "JSON API key should be redacted")
     try expect(!strict.contains("plain-secret"), "environment API key should be redacted")
     try expect(!strict.contains("opaque-token"), "bearer token should be redacted")
+}
+
+func testAppPaths() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let paths = AppPaths(root: root)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try paths.createDirectories()
+    for directory in [paths.root, paths.recordings, paths.exports, paths.working, paths.speechModels] {
+        let permissions = try FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber
+        try expect(permissions?.intValue == 0o700, "private app directory should use owner-only permissions")
+    }
+    try expect(paths.audioURL(lectureID: "unsafe/id").lastPathComponent == "unsafe-id.m4a", "recording paths should sanitize identifiers")
 }
 
 func testKeychainStore() throws {
@@ -293,6 +308,7 @@ func testServerRouter() async throws {
     try expect(health.status == 200, "authorized health request")
     let page = await router.handle(HTTPRequest(method: "GET", path: "/", query: ["token": "secret-token"]))
     try expect(page.status == 200 && String(data: page.body, encoding: .utf8) == "hello", "authorized static page")
+    try expect(page.headers["Content-Security-Policy"]?.contains("connect-src 'self'") == true, "local page should have a restrictive CSP")
 
     let course = Course(id: "audio-course", name: "Audio", professor: "Professor")
     try repository.upsertCourse(course)
@@ -315,6 +331,7 @@ func testServerRouter() async throws {
 
 let tests: [(String, () async throws -> Void)] = [
     ("domain", { try testDomainModels() }),
+    ("app paths", { try testAppPaths() }),
     ("storage", { try testStorage() }),
     ("keychain", { try testKeychainStore() }),
     ("chunking", { try testTranscriptChunking() }),

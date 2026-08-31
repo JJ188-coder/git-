@@ -189,6 +189,32 @@ public struct TranscriptSegment: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+public struct TranscriptQuality: Codable, Hashable, Sendable {
+    public var segmentCount: Int
+    public var scoredSegmentCount: Int
+    public var lowConfidenceCount: Int
+    public var meanConfidence: Double?
+
+    public init(segments: [TranscriptSegment]) {
+        let finalized = segments.filter(\.isFinal)
+        let scores = finalized.compactMap { segment -> Double? in
+            guard let confidence = segment.confidence, confidence.isFinite, (0...1).contains(confidence) else {
+                return nil
+            }
+            return confidence
+        }
+        segmentCount = finalized.count
+        scoredSegmentCount = scores.count
+        lowConfidenceCount = scores.filter { $0 < TranscriptSegment.lowConfidenceThreshold }.count
+        meanConfidence = scores.isEmpty ? nil : scores.reduce(0, +) / Double(scores.count)
+    }
+
+    public var lowConfidenceRate: Double? {
+        guard scoredSegmentCount > 0 else { return nil }
+        return Double(lowConfidenceCount) / Double(scoredSegmentCount)
+    }
+}
+
 public struct LectureMarker: Codable, Hashable, Sendable, Identifiable {
     public var id: String
     public var lectureID: String

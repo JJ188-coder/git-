@@ -177,7 +177,13 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
             if existingReviewed.isEmpty {
                 if lecture.status != .reviewingEnglish { lecture.status = .reviewingEnglish; lecture.updatedAt = Date(); try repository.upsertLecture(lecture) }
                 let locale = try await SpeechAssetManager.ensureInstalled(identifier: course?.speechLocaleIdentifier)
-                reviewed = try await OfflineDictationTranscriber.review(audioURL: URL(fileURLWithPath: path), lectureID: lecture.id, vocabulary: course?.vocabulary ?? [], locale: locale)
+                reviewed = try await OfflineDictationTranscriber.review(
+                    audioURL: URL(fileURLWithPath: path),
+                    lectureID: lecture.id,
+                    vocabulary: course?.vocabulary ?? [],
+                    locale: locale,
+                    customModelRoot: paths.speechModels
+                )
                 for segment in reviewed { try repository.appendTranscript(segment) }
             } else {
                 reviewed = existingReviewed

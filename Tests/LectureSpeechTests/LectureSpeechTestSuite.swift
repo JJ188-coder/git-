@@ -40,10 +40,29 @@ public func testLectureSpeech() throws {
     try testFallbackMappingAndFinality()
     try testConfidenceClassification()
     try testVocabularyNormalization()
+    try testCustomVocabularyFingerprint()
     try testSpeechConfigurations()
     try testLectureEnglishLocaleResolution()
     try testAudioLevels()
     try testCheckpointCadence()
+}
+
+@available(macOS 26.0, *)
+private func testCustomVocabularyFingerprint() throws {
+    let first = CustomVocabularyModel.fingerprint(
+        locale: Locale(identifier: "en-US"),
+        vocabulary: [" Nash   equilibrium ", "Pareto efficiency"]
+    )
+    let equivalent = CustomVocabularyModel.fingerprint(
+        locale: Locale(identifier: "en-US"),
+        vocabulary: ["nash equilibrium", "pareto efficiency"]
+    )
+    let otherLocale = CustomVocabularyModel.fingerprint(
+        locale: Locale(identifier: "en-GB"),
+        vocabulary: ["Nash equilibrium", "Pareto efficiency"]
+    )
+    try speechExpect(first == equivalent, "fingerprint should use normalized case-insensitive terms")
+    try speechExpect(first != otherLocale, "fingerprint should separate locale-specific models")
 }
 
 @available(macOS 26.0, *)

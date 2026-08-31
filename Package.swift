@@ -31,6 +31,7 @@ let package = Package(
                 .linkedFramework("Speech"),
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreMedia"),
+                .linkedFramework("CryptoKit"),
             ]
         ),
         .executableTarget(
@@ -48,7 +49,7 @@ let package = Package(
             name: "LectureTests",
             dependencies: ["LectureCore", "LectureServer", "LectureSpeech"],
             path: "Tests",
-            exclude: ["ServerSmoke", "KeyImportSmoke", "DeepSeekSmoke"],
+            exclude: ["ServerSmoke", "KeyImportSmoke", "DeepSeekSmoke", "SpeechFileSmoke"],
             sources: ["main.swift", "LectureSpeechTests/LectureSpeechTestSuite.swift"]
         ),
         .executableTarget(
@@ -65,6 +66,11 @@ let package = Package(
             name: "LectureDeepSeekSmoke",
             dependencies: ["LectureCore"],
             path: "Tests/DeepSeekSmoke"
+        ),
+        .executableTarget(
+            name: "LectureSpeechFileSmoke",
+            dependencies: ["LectureCore", "LectureSpeech"],
+            path: "Tests/SpeechFileSmoke"
         ),
     ],
     swiftLanguageModes: [.v5]

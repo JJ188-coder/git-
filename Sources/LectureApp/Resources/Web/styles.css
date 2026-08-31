@@ -3010,3 +3010,124 @@ button.marker-row {
     box-shadow: none;
   }
 }
+
+/* Recognition evidence and accuracy protocol */
+.select-field small,
+.level-block small {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .03em;
+}
+
+.quality-panel {
+  display: grid;
+  grid-template-columns: minmax(240px, .8fr) minmax(420px, 1.4fr);
+  gap: 32px;
+  align-items: center;
+  margin: 22px 0;
+  padding: 24px 26px;
+  border: 1px solid var(--line);
+  background: rgba(255, 253, 248, .68);
+}
+
+.quality-panel h2,
+.accuracy-guide h2 {
+  margin: 7px 0 8px;
+  font-family: var(--display);
+  font-size: clamp(24px, 3vw, 34px);
+  font-weight: 500;
+}
+
+.quality-panel > div > p,
+.accuracy-guide > p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.quality-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.quality-card {
+  min-height: 142px;
+  padding: 17px 18px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.quality-card > span,
+.quality-card small {
+  display: block;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: .07em;
+}
+
+.quality-card strong {
+  display: block;
+  margin: 16px 0 1px;
+  color: var(--accent);
+  font-family: var(--display);
+  font-size: 34px;
+  font-weight: 500;
+}
+
+.quality-card p {
+  margin: 0 0 11px;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.accuracy-guide {
+  margin-top: 36px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  background: rgba(255, 253, 248, .68);
+}
+
+.accuracy-guide ol {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 24px 0 20px;
+  padding: 1px;
+  list-style: none;
+  background: var(--line);
+}
+
+.accuracy-guide li {
+  display: grid;
+  gap: 8px;
+  padding: 19px 20px;
+  background: var(--surface);
+}
+
+.accuracy-guide li strong {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.accuracy-guide li span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 900px) {
+  .quality-panel { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 620px) {
+  .quality-cards,
+  .accuracy-guide ol { grid-template-columns: 1fr; }
+  .quality-panel,
+  .accuracy-guide { padding: 20px; }
+}

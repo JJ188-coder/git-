@@ -95,7 +95,9 @@ public final class LoopbackHTTPServer: @unchecked Sendable {
         headers["Content-Length"] = String(response.body.count)
         headers["Connection"] = "close"
         headers["X-Content-Type-Options"] = "nosniff"
+        headers["X-Frame-Options"] = "DENY"
         headers["Referrer-Policy"] = "no-referrer"
+        headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         var text = "HTTP/1.1 \(response.status) \(reason)\r\n"
         for (key, value) in headers.sorted(by: { $0.key < $1.key }) { text += "\(key): \(value)\r\n" }
         text += "\r\n"

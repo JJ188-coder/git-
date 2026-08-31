@@ -147,8 +147,23 @@ public final class LectureAPIRouter: @unchecked Sendable {
             let id = parts[2]
             if parts.count == 3, request.method == "GET" {
                 guard let lecture = try repository.lecture(id: id) else { return .jsonError(status: 404, message: "未找到课堂") }
-                struct Detail: Encodable { let lecture: LectureRecord; let transcripts: [TranscriptSegment]; let markers: [LectureMarker]; let summaries: [SummaryVersion] }
-                return .json(Detail(lecture: lecture, transcripts: try repository.transcripts(lectureID: id, source: nil), markers: try repository.markers(lectureID: id), summaries: try repository.summaries(lectureID: id)))
+                struct Detail: Encodable {
+                    let lecture: LectureRecord
+                    let transcripts: [TranscriptSegment]
+                    let markers: [LectureMarker]
+                    let summaries: [SummaryVersion]
+                    let liveQuality: TranscriptQuality
+                    let reviewedQuality: TranscriptQuality
+                }
+                let transcripts = try repository.transcripts(lectureID: id, source: nil)
+                return .json(Detail(
+                    lecture: lecture,
+                    transcripts: transcripts,
+                    markers: try repository.markers(lectureID: id),
+                    summaries: try repository.summaries(lectureID: id),
+                    liveQuality: TranscriptQuality(segments: transcripts.filter { $0.source == .liveEnglish }),
+                    reviewedQuality: TranscriptQuality(segments: transcripts.filter { $0.source == .reviewedEnglish })
+                ))
             }
             if parts.count == 4, parts[3] == "retry", request.method == "POST" {
                 try await runtime.retryProcessing(lectureID: id); return .json(["ok": true])
@@ -192,7 +207,10 @@ public final class LectureAPIRouter: @unchecked Sendable {
         default: mime = "application/octet-stream"
         }
         var headers = ["Content-Type": mime, "Cache-Control": "no-store"]
-        if path == "/" { headers["Set-Cookie"] = "lecture_token=\(token); Path=/; HttpOnly; SameSite=Strict" }
+        if path == "/" {
+            headers["Set-Cookie"] = "lecture_token=\(token); Path=/; HttpOnly; SameSite=Strict"
+            headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        }
         return HTTPResponse(status: 200, headers: headers, body: data)
     }
 
