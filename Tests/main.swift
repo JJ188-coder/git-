@@ -50,11 +50,16 @@ func testAppPaths() throws {
     try Data().write(to: paths.database)
     try Data().write(to: paths.database.appendingPathExtension("wal"))
     try Data().write(to: paths.database.appendingPathExtension("shm"))
+    let legacyRecording = paths.recordings.appendingPathComponent("legacy-recording.m4a")
+    try Data("legacy".utf8).write(to: legacyRecording)
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: legacyRecording.path)
     try paths.createDirectories()
     for file in [paths.database, paths.database.appendingPathExtension("wal"), paths.database.appendingPathExtension("shm")] {
         let permissions = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
         try expect(permissions?.intValue == 0o600, "database files should use owner-only permissions")
     }
+    let recordingPermissions = try FileManager.default.attributesOfItem(atPath: legacyRecording.path)[.posixPermissions] as? NSNumber
+    try expect(recordingPermissions?.intValue == 0o600, "existing recordings should be migrated to owner-only permissions")
     try expect(paths.audioURL(lectureID: "unsafe/id").lastPathComponent == "unsafe-id.m4a", "recording paths should sanitize identifiers")
 }
 

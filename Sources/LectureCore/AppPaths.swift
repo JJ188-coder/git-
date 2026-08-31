@@ -33,6 +33,15 @@ public struct AppPaths: Sendable {
         try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: exports.path)
         try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: working.path)
         try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: speechModels.path)
+        for url in try fileManager.contentsOfDirectory(
+            at: recordings,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
         for url in [database, database.appendingPathExtension("wal"), database.appendingPathExtension("shm")]
         where fileManager.fileExists(atPath: url.path) {
             try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
