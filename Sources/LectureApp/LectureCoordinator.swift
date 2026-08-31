@@ -57,7 +57,8 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
         }
         guard canStart else { throw CoordinatorError.alreadyRecording }
         defer { withState { operationInProgress = false } }
-        guard await MicrophoneRecorder.requestPermission() else { throw CoordinatorError.microphoneDenied }
+        withState { statusMessageValue = "正在检查麦克风与语音识别权限…" }
+        try await LecturePermissionAuthorizer().authorize()
         guard let course = try repository.course(id: courseID) else { throw CoordinatorError.missingCourse }
         try ensureRecordingCapacity()
         withState { statusMessageValue = "正在准备本地英语识别资源…" }
@@ -224,9 +225,9 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
 }
 
 private enum CoordinatorError: Error, CustomStringConvertible {
-    case microphoneDenied, alreadyRecording, busy, notRecording, missingCourse, missingLecture, missingAudio, lowDiskSpace
+    case alreadyRecording, busy, notRecording, missingCourse, missingLecture, missingAudio, lowDiskSpace
     var description: String {
-        switch self { case .microphoneDenied: return "请在系统设置中允许 Lecture 使用麦克风"; case .alreadyRecording: return "已有课堂正在录音或正在切换状态"; case .busy: return "Lecture 正在切换课堂状态，请稍后再试"; case .notRecording: return "当前没有正在录音的课堂"; case .missingCourse: return "请先选择课程"; case .missingLecture: return "未找到课堂"; case .missingAudio: return "录音文件不存在"; case .lowDiskSpace: return "可用磁盘空间不足 1 GB，请先清理空间再开始课堂" }
+        switch self { case .alreadyRecording: return "已有课堂正在录音或正在切换状态"; case .busy: return "Lecture 正在切换课堂状态，请稍后再试"; case .notRecording: return "当前没有正在录音的课堂"; case .missingCourse: return "请先选择课程"; case .missingLecture: return "未找到课堂"; case .missingAudio: return "录音文件不存在"; case .lowDiskSpace: return "可用磁盘空间不足 1 GB，请先清理空间再开始课堂" }
     }
 }
 

@@ -48,6 +48,53 @@ public func testLectureSpeech() throws {
 }
 
 @available(macOS 26.0, *)
+public func testLecturePermissions() async throws {
+    let granted = LecturePermissionAuthorizer(
+        timeout: 0.05,
+        microphoneStatus: { .granted },
+        requestMicrophone: { _ in
+            preconditionFailure("granted microphone permission must not prompt again")
+        },
+        speechRecognitionStatus: { .granted },
+        requestSpeechRecognition: { _ in
+            preconditionFailure("granted speech permission must not prompt again")
+        }
+    )
+    try await granted.authorize()
+
+    let timeout = LecturePermissionAuthorizer(
+        timeout: 0.02,
+        microphoneStatus: { .undetermined },
+        requestMicrophone: { _ in },
+        speechRecognitionStatus: { .granted },
+        requestSpeechRecognition: { _ in }
+    )
+    let startedAt = ContinuousClock.now
+    do {
+        try await timeout.authorize()
+        throw LectureSpeechTestFailure(description: "unanswered microphone prompt should time out")
+    } catch let error as LecturePermissionError {
+        try speechExpect(error == .timedOut(.microphone), "microphone timeout should identify the blocked permission")
+        try speechExpect(ContinuousClock.now - startedAt < .seconds(1), "permission timeout should release the caller promptly")
+    }
+
+    let speechDenied = LecturePermissionAuthorizer(
+        timeout: 0.05,
+        microphoneStatus: { .granted },
+        requestMicrophone: { _ in },
+        speechRecognitionStatus: { .denied },
+        requestSpeechRecognition: { _ in }
+    )
+    do {
+        try await speechDenied.authorize()
+        throw LectureSpeechTestFailure(description: "denied speech permission should fail")
+    } catch let error as LecturePermissionError {
+        try speechExpect(error == .denied(.speechRecognition), "speech denial should name speech recognition")
+        try speechExpect(error.description.contains("语音识别"), "speech denial should provide a useful Chinese instruction")
+    }
+}
+
+@available(macOS 26.0, *)
 private func testCustomVocabularyFingerprint() throws {
     let first = CustomVocabularyModel.fingerprint(
         locale: Locale(identifier: "en-US"),

@@ -335,6 +335,8 @@ func testServerRouter() async throws {
     let page = await router.handle(HTTPRequest(method: "GET", path: "/", query: ["token": "secret-token"]))
     try expect(page.status == 200 && String(data: page.body, encoding: .utf8) == "hello", "authorized static page")
     try expect(page.headers["Content-Security-Policy"]?.contains("connect-src 'self'") == true, "local page should have a restrictive CSP")
+    try expect(page.headers["Content-Security-Policy"]?.contains("style-src 'self'") == true, "styles should remain external under CSP")
+    try expect(page.headers["Content-Security-Policy"]?.contains("unsafe-inline") == false, "CSP must not be weakened for the audio level meter")
 
     let course = Course(id: "audio-course", name: "Audio", professor: "Professor")
     try repository.upsertCourse(course)
@@ -355,6 +357,18 @@ func testServerRouter() async throws {
     try expect(deleted.status == 200 && !FileManager.default.fileExists(atPath: m4a.path), "course delete should remove original recordings")
 }
 
+func testWebSecurityContract() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let appJavaScript = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/LectureApp/Resources/Web/app.js"),
+        encoding: .utf8
+    )
+    try expect(!appJavaScript.contains("style=\""), "web UI must not use inline styles blocked by its CSP")
+    try expect(appJavaScript.contains("<progress"), "microphone level should use a CSP-safe native progress value")
+}
+
 let tests: [(String, () async throws -> Void)] = [
     ("domain", { try testDomainModels() }),
     ("app paths", { try testAppPaths() }),
@@ -366,7 +380,9 @@ let tests: [(String, () async throws -> Void)] = [
     ("DeepSeek request and redaction", testDeepSeekRequestShapeAndRedaction),
     ("DeepSeek workflows", testDeepSeekWorkflows),
     ("server router", testServerRouter),
+    ("web security contract", { try testWebSecurityContract() }),
     ("native speech helpers", { try testLectureSpeech() }),
+    ("native permission timeout", testLecturePermissions),
 ]
 
 Task {
