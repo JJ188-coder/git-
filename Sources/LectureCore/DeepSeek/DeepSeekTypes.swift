@@ -93,7 +93,27 @@ public enum DeepSeekError: Error, CustomStringConvertible {
 
 public enum DeepSeekResponseParser {
     public static func studySummary(from raw: String) throws -> StudySummary {
-        try decodeJSON(StudySummary.self, from: raw)
+        struct FlexibleSummary: Decodable {
+            let overview: String
+            let coreConcepts: FlexibleStringList
+            let definitions: FlexibleStringList
+            let professorExamples: FlexibleStringList
+            let professorEmphasis: FlexibleStringList
+            let possibleExamTopics: FlexibleStringList
+            let unresolvedQuestions: FlexibleStringList
+            let glossary: FlexibleGlossary
+        }
+        let value = try decodeJSON(FlexibleSummary.self, from: raw)
+        return StudySummary(
+            overview: value.overview,
+            coreConcepts: value.coreConcepts.values,
+            definitions: value.definitions.values,
+            professorExamples: value.professorExamples.values,
+            professorEmphasis: value.professorEmphasis.values,
+            possibleExamTopics: value.possibleExamTopics.values,
+            unresolvedQuestions: value.unresolvedQuestions.values,
+            glossary: value.glossary.values
+        )
     }
 
     public static func groundedAnswer(from raw: String, evidence: [GroundingEvidence]) throws -> GroundedAnswer {
@@ -117,5 +137,57 @@ public enum DeepSeekResponseParser {
         guard let data = cleaned.data(using: .utf8) else { throw DeepSeekError.invalidResponse("不是 UTF-8 文本") }
         do { return try JSONDecoder().decode(type, from: data) }
         catch { throw DeepSeekError.invalidResponse(String(describing: error)) }
+    }
+}
+
+private struct FlexibleStringList: Decodable {
+    let values: [String]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { values = []; return }
+        if let array = try? container.decode([String].self) {
+            values = array
+            return
+        }
+        if let dictionary = try? container.decode([String: String].self) {
+            values = dictionary.keys.sorted().map { key in
+                let value = dictionary[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return value.isEmpty ? key : "\(key)：\(value)"
+            }
+            return
+        }
+        if let string = try? container.decode(String.self) {
+            let value = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            values = value.isEmpty ? [] : [value]
+            return
+        }
+        throw DecodingError.typeMismatch(
+            [String].self,
+            .init(codingPath: decoder.codingPath, debugDescription: "Expected an array, dictionary, string, or null")
+        )
+    }
+}
+
+private struct FlexibleGlossary: Decodable {
+    let values: [GlossaryTerm]
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { values = []; return }
+        if let array = try? container.decode([GlossaryTerm].self) {
+            values = array
+            return
+        }
+        if let dictionary = try? container.decode([String: String].self) {
+            values = dictionary.keys.sorted().map {
+                GlossaryTerm(english: $0, chinese: dictionary[$0] ?? "")
+            }
+            return
+        }
+        throw DecodingError.typeMismatch(
+            [GlossaryTerm].self,
+            .init(codingPath: decoder.codingPath, debugDescription: "Expected a glossary array, dictionary, or null")
+        )
     }
 }

@@ -115,6 +115,19 @@ func testStructuredResponseParsing() throws {
     try expect(summary.overview == "Consumer choice under scarcity.", "summary overview should parse")
     try expect(summary.glossary.first?.chinese == "边际替代率", "summary glossary should parse")
 
+    let flexibleSummary = try DeepSeekResponseParser.studySummary(from: #"{"overview":"Demand comparison","coreConcepts":{"Hicksian demand":"compensated demand","Marshallian demand":"ordinary demand"},"definitions":{"Slutsky equation":"separates substitution and income effects"},"professorExamples":"Coffee and tea","professorEmphasis":[],"possibleExamTopics":[],"unresolvedQuestions":null,"glossary":{"Hicksian demand":"希克斯需求"}}"#)
+    try expect(
+        flexibleSummary.coreConcepts == ["Hicksian demand：compensated demand", "Marshallian demand：ordinary demand"],
+        "summary dictionaries should normalize into stable study bullets"
+    )
+    try expect(
+        flexibleSummary.definitions == ["Slutsky equation：separates substitution and income effects"],
+        "definition dictionaries should not fail the entire lecture workflow"
+    )
+    try expect(flexibleSummary.professorExamples == ["Coffee and tea"], "single summary strings should normalize into one bullet")
+    try expect(flexibleSummary.unresolvedQuestions.isEmpty, "null summary sections should normalize to empty lists")
+    try expect(flexibleSummary.glossary == [GlossaryTerm(english: "Hicksian demand", chinese: "希克斯需求")], "glossary dictionaries should normalize into terms")
+
     let evidence = [
         GroundingEvidence(id: "ev-1", lectureID: "lecture-1", lectureTitle: "Consumer Choice", segmentID: "s1", startTime: 96, endTime: 104, text: "The MRS diminishes along a convex indifference curve."),
         GroundingEvidence(id: "ev-2", lectureID: "lecture-2", lectureTitle: "Demand", segmentID: "s9", startTime: 210, endTime: 220, text: "Demand follows from utility maximization."),
