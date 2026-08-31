@@ -26,5 +26,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSSpeechRecognitionUsageDescription</key><string>Lecture 使用 macOS 本地语音识别生成课堂英文逐字稿。</string>
 </dict></plist>
 PLIST
-codesign --force --deep --sign - "$APP" >/dev/null
+codesign \
+  --force \
+  --deep \
+  --sign - \
+  --requirements '=designated => identifier "com.jiyuanyi.Lecture"' \
+  "$APP" >/dev/null
 echo "$APP"

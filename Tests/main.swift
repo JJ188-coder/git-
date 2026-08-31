@@ -387,6 +387,15 @@ func testWebSecurityContract() throws {
     try expect(appJavaScript.contains("<progress"), "microphone level should use a CSP-safe native progress value")
     try expect(appJavaScript.contains("正在准备…"), "long-running start should show visible progress")
     try expect(appJavaScript.contains("control.disabled = true"), "long-running controls should prevent duplicate requests")
+
+    let buildScript = try String(
+        contentsOf: projectRoot.appendingPathComponent("scripts/build-app.sh"),
+        encoding: .utf8
+    )
+    try expect(
+        buildScript.contains(#"designated => identifier "com.jiyuanyi.Lecture""#),
+        "packaged builds must keep a stable designated requirement so macOS permissions survive updates"
+    )
 }
 
 let tests: [(String, () async throws -> Void)] = [
