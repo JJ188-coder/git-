@@ -367,6 +367,8 @@ func testWebSecurityContract() throws {
     )
     try expect(!appJavaScript.contains("style=\""), "web UI must not use inline styles blocked by its CSP")
     try expect(appJavaScript.contains("<progress"), "microphone level should use a CSP-safe native progress value")
+    try expect(appJavaScript.contains("正在准备…"), "long-running start should show visible progress")
+    try expect(appJavaScript.contains("control.disabled = true"), "long-running controls should prevent duplicate requests")
 }
 
 let tests: [(String, () async throws -> Void)] = [

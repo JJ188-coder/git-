@@ -160,7 +160,13 @@
     main.innerHTML = `<section class="page settings-page"><header class="page-head"><div><span class="eyebrow">LOCAL DIAGNOSTICS</span><h1>课前，确认一切就绪。</h1><p>Lecture 不提供云端录音，也不会把音频发送给 DeepSeek。</p></div></header><div class="diagnostic-list"><div><span>${icon("mic")}麦克风与本地识别</span><strong>${r.speechAvailable ? "可用" : "首次开课时准备资源"}</strong></div><div><span>${icon("external")}英文 → 简体中文</span><strong>${r.translationAvailable ? "可用" : "首次翻译时下载语言"}</strong></div><div><span>${icon("lock")}DeepSeek API</span><strong>${r.deepSeekConfigured ? "已存入钥匙串" : "尚未配置"}</strong></div><div><span>${icon("database")}本地资料库</span><strong>~/Library/Application Support/Lecture</strong></div></div><section class="accuracy-guide"><div><span class="eyebrow">ACCURACY PROTOCOL</span><h2>四层识别保障</h2></div><ol><li><strong>匹配口音</strong><span>按课程选择教授最接近的英语地区。</span></li><li><strong>专业词模型</strong><span>词汇表实时提示，并在课后生成加权本地语言模型。</span></li><li><strong>完整复核</strong><span>停止录音后用远场长听写重新识别整段音频。</span></li><li><strong>证据可追溯</strong><span>保留原音、时间轴、可信度及实时/复核双版本。</span></li></ol><p>软件不能承诺 100% 正确。要测真实准确率，请用一段已知英文稿计算词错误率（WER）。</p></section><section class="settings-section"><div><span class="eyebrow">MACOS KEYCHAIN</span><h2>DeepSeek 密钥</h2><p>网页只负责提交；密钥由原生助手直接写入 macOS 钥匙串，浏览器不会保存。</p></div><div>${button(r.deepSeekConfigured ? "更换密钥" : "保存密钥", "key", "button-primary")} ${r.deepSeekConfigured ? button("测试连接", "test-key") + button("删除", "delete-key", "button-danger") : ""}</div></section></section>`;
   }
 
-  async function action(value) {
+  async function action(value, source = null) {
+    const control = source?.closest?.("button[data-action]");
+    const originalLabel = control?.textContent;
+    if (control && ["start", "stop", "retry", "test-key"].includes(value)) {
+      control.disabled = true;
+      control.textContent = value === "start" ? "正在准备…" : value === "stop" ? "正在保存…" : "处理中…";
+    }
     try {
       if (value === "new-course") openCourseDialog();
       else if (value.startsWith("edit-course:")) openCourseDialog(state.courses.find(c => c.id === value.split(":")[1]));
@@ -178,6 +184,7 @@
       else if (value === "open-summary") setRoute("summary");
       else if (value === "view-history") setRoute("history");
     } catch (error) { toast(error.message, true); }
+    finally { if (control?.isConnected) { control.disabled = false; control.textContent = originalLabel; } }
   }
 
   function openCourseDialog(c = null) {
@@ -205,8 +212,9 @@
   document.addEventListener("click", event => {
     const route = event.target.closest("[data-route]")?.dataset.route;
     if (route) setRoute(route);
-    const act = event.target.closest("[data-action]")?.dataset.action;
-    if (act) action(act);
+    const actionNode = event.target.closest("[data-action]");
+    const act = actionNode?.dataset.action;
+    if (act) action(act, actionNode);
     const timed = event.target.closest("[data-time]");
     if (!timed) return;
     if (timed.dataset.lecture && timed.dataset.lecture !== state.currentLectureID) {
