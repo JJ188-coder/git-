@@ -58,9 +58,11 @@ public enum LectureStatus: String, Codable, CaseIterable, Hashable, Sendable {
              (.translatingChinese, .processingDeepSeek),
              (.translatingChinese, .completed),
              (.translatingChinese, .failed),
+             (.processingDeepSeek, .processingDeepSeek),
              (.processingDeepSeek, .completed),
              (.processingDeepSeek, .failed),
              (.failed, .reviewingEnglish),
+             (.failed, .failed),
              (.failed, .processingDeepSeek),
              (.failed, .completed):
             return true
@@ -283,4 +285,3 @@ public struct ChatMessage: Codable, Hashable, Sendable, Identifiable {
         self.createdAt = createdAt
     }
 }
-

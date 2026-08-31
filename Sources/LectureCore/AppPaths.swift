@@ -28,7 +28,9 @@ public struct AppPaths: Sendable {
     }
 
     public func audioURL(lectureID: String, fileExtension: String = "m4a") -> URL {
-        let safe = lectureID.replacingOccurrences(of: "/", with: "-")
-        return recordings.appendingPathComponent("\(safe).\(fileExtension)")
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let safe = lectureID.unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : Character("-") }
+        let ext = fileExtension.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined()
+        return recordings.appendingPathComponent("\(String(safe)).\(ext.isEmpty ? "m4a" : ext)")
     }
 }

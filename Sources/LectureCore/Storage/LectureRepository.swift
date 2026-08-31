@@ -10,6 +10,7 @@ public protocol LectureRepository: Sendable {
     func upsertLecture(_ lecture: LectureRecord) throws
     func lecture(id: String) throws -> LectureRecord?
     func listLectures(courseID: String) throws -> [LectureRecord]
+    func allLectures() throws -> [LectureRecord]
     func incompleteLectures() throws -> [LectureRecord]
     func deleteLecture(id: String) throws
 
@@ -134,6 +135,9 @@ public final class SQLiteLectureRepository: LectureRepository, @unchecked Sendab
     }
 
     public func upsertLecture(_ lecture: LectureRecord) throws {
+        if let existing = try self.lecture(id: lecture.id), !existing.status.canTransition(to: lecture.status) {
+            throw SQLiteFailure(operation: "lecture transition", message: "Invalid status transition \(existing.status.rawValue) -> \(lecture.status.rawValue)")
+        }
         try database.execute("""
         INSERT INTO lectures(id, course_id, title, status, started_at, updated_at, payload)
         VALUES(?, ?, ?, ?, ?, ?, ?)
@@ -155,6 +159,10 @@ public final class SQLiteLectureRepository: LectureRepository, @unchecked Sendab
         try decodeRows("SELECT payload FROM lectures WHERE course_id = ? ORDER BY started_at DESC", [.text(courseID)])
     }
 
+    public func allLectures() throws -> [LectureRecord] {
+        try decodeRows("SELECT payload FROM lectures ORDER BY started_at DESC")
+    }
+
     public func incompleteLectures() throws -> [LectureRecord] {
         try decodeRows("SELECT payload FROM lectures WHERE status != ? ORDER BY started_at DESC", [.text(LectureStatus.completed.rawValue)])
     }
@@ -167,7 +175,7 @@ public final class SQLiteLectureRepository: LectureRepository, @unchecked Sendab
         try database.execute("""
         INSERT INTO transcripts(id, lecture_id, source, start_time, end_time, payload)
         VALUES(?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET source=excluded.source, start_time=excluded.start_time,
+        ON CONFLICT(id) DO UPDATE SET lecture_id=excluded.lecture_id, source=excluded.source, start_time=excluded.start_time,
             end_time=excluded.end_time, payload=excluded.payload
         """, parameters: [
             .text(segment.id), .text(segment.lectureID), .text(segment.source.rawValue),
@@ -185,7 +193,7 @@ public final class SQLiteLectureRepository: LectureRepository, @unchecked Sendab
     public func appendMarker(_ marker: LectureMarker) throws {
         try database.execute("""
         INSERT INTO markers(id, lecture_id, marker_time, payload) VALUES(?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET marker_time=excluded.marker_time, payload=excluded.payload
+        ON CONFLICT(id) DO UPDATE SET lecture_id=excluded.lecture_id, marker_time=excluded.marker_time, payload=excluded.payload
         """, parameters: [.text(marker.id), .text(marker.lectureID), .double(marker.time), .text(try encode(marker))])
     }
 
@@ -196,7 +204,7 @@ public final class SQLiteLectureRepository: LectureRepository, @unchecked Sendab
     public func appendSummary(_ summary: SummaryVersion) throws {
         try database.execute("""
         INSERT INTO summaries(id, lecture_id, created_at, payload) VALUES(?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at, payload=excluded.payload
+        ON CONFLICT(id) DO UPDATE SET lecture_id=excluded.lecture_id, created_at=excluded.created_at, payload=excluded.payload
         """, parameters: [.text(summary.id), .text(summary.lectureID), .double(summary.createdAt.timeIntervalSince1970), .text(try encode(summary))])
     }
 
@@ -207,7 +215,7 @@ public final class SQLiteLectureRepository: LectureRepository, @unchecked Sendab
     public func appendChatMessage(_ message: ChatMessage) throws {
         try database.execute("""
         INSERT INTO chat_messages(id, course_id, lecture_id, created_at, payload) VALUES(?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET payload=excluded.payload
+        ON CONFLICT(id) DO UPDATE SET course_id=excluded.course_id, lecture_id=excluded.lecture_id, created_at=excluded.created_at, payload=excluded.payload
         """, parameters: [.text(message.id), .text(message.courseID), value(message.lectureID), .double(message.createdAt.timeIntervalSince1970), .text(try encode(message))])
     }
 
@@ -215,7 +223,7 @@ public final class SQLiteLectureRepository: LectureRepository, @unchecked Sendab
         if let lectureID {
             return try decodeRows("SELECT payload FROM chat_messages WHERE course_id = ? AND lecture_id = ? ORDER BY created_at", [.text(courseID), .text(lectureID)])
         }
-        return try decodeRows("SELECT payload FROM chat_messages WHERE course_id = ? ORDER BY created_at", [.text(courseID)])
+        return try decodeRows("SELECT payload FROM chat_messages WHERE course_id = ? AND lecture_id IS NULL ORDER BY created_at", [.text(courseID)])
     }
 
     private func value(_ string: String?) -> SQLiteValue {

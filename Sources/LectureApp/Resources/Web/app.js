@@ -1,0 +1,156 @@
+(function () {
+  "use strict";
+
+  const token = new URLSearchParams(location.search).get("token") || sessionStorage.getItem("lecture.token") || "";
+  if (token) sessionStorage.setItem("lecture.token", token);
+  const state = {
+    route: location.hash.slice(1) || "live",
+    courses: [], lectures: [], currentCourseID: null, currentLectureID: null,
+    runtime: { recording: false, duration: 0, audioLevel: 0, volatileEnglish: "", volatileChinese: "", deepSeekConfigured: false },
+    detail: null, chat: [], connected: false
+  };
+  const main = document.getElementById("app-main");
+  const breadcrumb = document.getElementById("breadcrumb");
+  const modeNote = document.getElementById("mode-note");
+
+  async function api(path, options = {}) {
+    const headers = { "Content-Type": "application/json", "X-Lecture-Token": token, ...(options.headers || {}) };
+    const response = await fetch(path, { ...options, headers, credentials: "same-origin" });
+    const text = await response.text();
+    let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!response.ok) throw new Error(data?.error || `本机服务错误 ${response.status}`);
+    return data;
+  }
+
+  function escapeHTML(value = "") { return String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+  function fmt(seconds = 0) { const s = Math.max(0, Math.floor(seconds)); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; }
+  function date(value) { try { return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); } catch { return ""; } }
+  function icon(name) { return `<svg aria-hidden="true"><use href="#icon-${name}"></use></svg>`; }
+  function button(label, action, kind = "button-quiet", disabled = false) { return `<button class="button ${kind}" data-action="${action}" ${disabled ? "disabled" : ""}>${escapeHTML(label)}</button>`; }
+  function course() { return state.courses.find(c => c.id === state.currentCourseID) || state.courses[0]; }
+
+  function toast(message, danger = false) {
+    const region = document.getElementById("toast-region"); const node = document.createElement("div");
+    node.className = `toast ${danger ? "toast-danger" : ""}`; node.textContent = message; region.append(node); setTimeout(() => node.remove(), 4200);
+  }
+
+  function setRoute(route) { state.route = route; location.hash = route; render(); }
+  function syncNav() { document.querySelectorAll("[data-route]").forEach(node => { const active = node.dataset.route === state.route; node.classList.toggle("is-active", active); active ? node.setAttribute("aria-current", "page") : node.removeAttribute("aria-current"); }); }
+
+  async function bootstrap() {
+    try {
+      await api("/api/health"); state.connected = true;
+      state.courses = await api("/api/courses"); state.currentCourseID ||= state.courses[0]?.id || null;
+      state.lectures = await api("/api/lectures"); state.runtime = await api("/api/state");
+      modeNote.textContent = "LOCAL · 127.0.0.1"; document.getElementById("local-state").innerHTML = `<span class="state-lamp"></span><span>本机服务已连接</span>`;
+    } catch (error) { state.connected = false; modeNote.textContent = "本机服务未连接"; toast(error.message, true); }
+    render();
+    setInterval(refreshRuntime, 1000);
+  }
+
+  async function refreshRuntime() {
+    if (!state.connected) return;
+    try { state.runtime = await api("/api/state"); if (state.route === "live") renderLive(); } catch {}
+  }
+
+  function render() {
+    syncNav();
+    ({ live: renderLive, history: renderHistory, summary: renderSummary, qa: renderQA, settings: renderSettings, detail: renderDetail }[state.route] || renderLive)();
+  }
+
+  function empty(title, copy, action = "新建课程") { return `<section class="empty-state"><span class="eyebrow">LOCAL ARCHIVE</span><h1>${title}</h1><p>${copy}</p>${button(action, "new-course", "button-primary")}</section>`; }
+
+  function renderLive() {
+    breadcrumb.textContent = "课堂 / 实时课堂"; const selected = course();
+    if (!state.courses.length) { main.innerHTML = empty("先建立第一门课程", "课程词汇表会直接帮助本地英文识别器更准确地听懂教授、术语和缩写。"); return; }
+    const segments = state.detail?.transcripts || []; const english = segments.filter(s => s.source === "liveEnglish").slice(-12); const chinese = segments.filter(s => s.source === "liveChinese");
+    main.innerHTML = `<section class="page live-page">
+      <header class="page-head live-head"><div><span class="eyebrow">LIVE LECTURE</span><h1>听课，不漏掉上下文。</h1><p>英文识别和中文翻译在本机运行；原始录音始终保留。</p></div><div class="lecture-clock"><strong>${fmt(state.runtime.duration)}</strong><span>${state.runtime.recording ? "REC · 正在录音" : "READY · 等待开始"}</span></div></header>
+      <div class="control-rail"><label class="select-field"><span>当前课程</span><select id="course-select">${state.courses.map(c => `<option value="${c.id}" ${c.id === selected?.id ? "selected" : ""}>${escapeHTML(c.name)}${c.code ? ` · ${escapeHTML(c.code)}` : ""}</option>`).join("")}</select></label><div class="level-block"><span>麦克风</span><div class="level-track"><i style="width:${Math.round((state.runtime.audioLevel || 0) * 100)}%"></i></div></div><div class="control-actions">${button("标记重点", "marker", "button-quiet", !state.runtime.recording)}${button(state.runtime.recording ? "结束课堂" : "开始课堂", state.runtime.recording ? "stop" : "start", state.runtime.recording ? "button-danger" : "button-primary")}</div></div>
+      <div class="transcript-workspace"><article class="transcript-column"><header><span class="mono-label">ENGLISH · LOCAL</span><span>低于 55% 会标记</span></header><div class="transcript-stream">${english.length ? english.map(s => `<button class="segment ${s.confidence != null && s.confidence < .55 ? "is-low" : ""}" data-time="${s.startTime}"><time>${fmt(s.startTime)}</time><p>${escapeHTML(s.text)}</p>${s.confidence != null ? `<small>${Math.round(s.confidence * 100)}%</small>` : ""}</button>`).join("") : `<div class="list-empty">${state.runtime.recording ? "正在聆听教授…" : "开始课堂后，确认的英文会出现在这里。"}</div>`}${state.runtime.volatileEnglish ? `<div class="segment draft"><time>LIVE</time><p>${escapeHTML(state.runtime.volatileEnglish)}</p></div>` : ""}</div></article>
+      <article class="transcript-column chinese"><header><span class="mono-label">简体中文 · APPLE</span><span>低延迟翻译</span></header><div class="transcript-stream">${chinese.length ? chinese.slice(-12).map(s => `<div class="segment"><time>${fmt(s.startTime)}</time><p>${escapeHTML(s.text)}</p></div>`).join("") : `<div class="list-empty">中文会跟随确认后的英文逐段出现。</div>`}${state.runtime.volatileChinese ? `<div class="segment draft"><time>LIVE</time><p>${escapeHTML(state.runtime.volatileChinese)}</p></div>` : ""}</div></article></div>
+      <footer class="live-status"><span>${escapeHTML(state.runtime.statusMessage || "录音、识别、翻译互相独立；翻译失败不会停止录音。")}</span><span>源文件 · ~/Library/Application Support/Lecture</span></footer></section>`;
+    document.getElementById("course-select")?.addEventListener("change", e => { state.currentCourseID = e.target.value; });
+  }
+
+  function renderHistory() {
+    breadcrumb.textContent = "资料库 / 课程历史";
+    main.innerHTML = `<section class="page"><header class="page-head archive-head"><div><span class="eyebrow">COURSE ARCHIVE</span><h1>每门课，拥有自己的记忆。</h1><p>逐字稿、录音、标记、总结和问答都按课程归档。</p></div>${button("新建课程", "new-course", "button-primary")}</header>
+      <div class="search-line">${icon("search")}<input id="course-search" placeholder="搜索课程、课程代码或教授"></div>
+      <div class="course-list">${state.courses.length ? state.courses.map(c => { const lectures = state.lectures.filter(l => l.courseID === c.id); return `<article class="course-row" data-course="${c.id}"><div><span class="mono-label">${escapeHTML(c.code || "COURSE")}</span><h2>${escapeHTML(c.name)}</h2><p>${escapeHTML(c.professor || "未填写教授")} · ${escapeHTML(c.semester || "未填写学期")}</p></div><div class="course-meta"><strong>${lectures.length}</strong><span>节课堂</span></div><div class="row-actions">${button("编辑", `edit-course:${c.id}`)}${button("查看", `course:${c.id}`, "button-primary")}</div></article>`; }).join("") : empty("还没有课程", "先建立课程，再开始第一节英文课堂。")}</div></section>`;
+    document.getElementById("course-search")?.addEventListener("input", e => document.querySelectorAll(".course-row").forEach(row => row.hidden = !row.textContent.toLowerCase().includes(e.target.value.toLowerCase())));
+  }
+
+  async function renderDetail() {
+    breadcrumb.textContent = "资料库 / 课堂详情";
+    if (!state.currentLectureID) { setRoute("history"); return; }
+    try { state.detail = await api(`/api/lectures/${state.currentLectureID}`); } catch (e) { toast(e.message, true); return; }
+    const { lecture, transcripts, markers, summaries } = state.detail; const reviewed = transcripts.filter(s => s.source === "reviewedEnglish"); const live = transcripts.filter(s => s.source === "liveEnglish"); const english = reviewed.length ? reviewed : live; const corrected = transcripts.filter(s => s.source === "correctedChinese"); const zh = corrected.length ? corrected : transcripts.filter(s => s.source === "liveChinese");
+    main.innerHTML = `<section class="page"><button class="back-link" data-action="back-history">${icon("back")}课程历史</button><header class="page-head"><div><span class="eyebrow">LECTURE RECORD</span><h1>${escapeHTML(lecture.title)}</h1><p>${date(lecture.startedAt)} · ${fmt(lecture.duration)} · ${escapeHTML(lecture.status)}</p></div>${lecture.status === "failed" ? button("重试课后处理", "retry", "button-primary") : ""}</header>
+      <div class="audio-console"><audio id="audio" controls preload="metadata" src="/api/lectures/${lecture.id}/audio?token=${encodeURIComponent(token)}"></audio><span>原始录音 · 仅在本机</span></div>
+      <div class="detail-grid"><article class="paper transcript-paper"><header><span class="mono-label">${reviewed.length ? "REVIEWED ENGLISH" : "LIVE ENGLISH"}</span><span>${english.filter(s => s.confidence != null && s.confidence < .55).length} 处待复核</span></header>${english.map(s => `<button class="detail-segment" data-time="${s.startTime}"><time>${fmt(s.startTime)}</time><p>${escapeHTML(s.text)}</p></button>`).join("") || `<p class="list-empty">尚无英文逐字稿。</p>`}</article><article class="paper transcript-paper chinese"><header><span class="mono-label">${corrected.length ? "DEEPSEEK CORRECTED" : "LIVE CHINESE"}</span></header>${zh.map(s => `<div class="detail-segment"><time>${fmt(s.startTime)}</time><p>${escapeHTML(s.text)}</p></div>`).join("") || `<p class="list-empty">尚无中文翻译。</p>`}</article></div>
+      <section class="marker-strip"><span class="mono-label">MARKERS</span>${markers.map(m => `<button data-time="${m.time}">${fmt(m.time)} · ${escapeHTML(m.label)}</button>`).join("") || "没有课堂标记"}</section>${summaries[0] ? `<section class="summary-preview"><span class="eyebrow">LATEST SUMMARY</span><h2>最新学习总结</h2><p>${escapeHTML(summaries[0].content.overview)}</p>${button("打开完整总结", "open-summary", "button-primary")}</section>` : ""}</section>`;
+  }
+
+  function renderSummary() {
+    breadcrumb.textContent = "复习 / 学习总结"; const summary = state.detail?.summaries?.[0]?.content;
+    if (!summary) { main.innerHTML = empty("还没有可读的总结", "结束一节课堂后，Lecture 会先本地复核英文，再用 DeepSeek 生成忠于原文的学习资料。", "查看课程历史"); return; }
+    const list = (title, values) => `<section><h3>${title}</h3><ul>${(values || []).map(v => `<li>${escapeHTML(v)}</li>`).join("") || "<li>暂无</li>"}</ul></section>`;
+    main.innerHTML = `<article class="page summary-document"><header><span class="eyebrow">STUDY EDITION</span><h1>课堂学习总结</h1><p>${escapeHTML(summary.overview)}</p></header><div class="summary-columns">${list("核心概念", summary.coreConcepts)}${list("定义", summary.definitions)}${list("教授举例", summary.professorExamples)}${list("教授强调", summary.professorEmphasis)}${list("可能的考试方向 *", summary.possibleExamTopics)}${list("仍待解决的问题", summary.unresolvedQuestions)}</div><section class="glossary"><h2>双语术语表</h2>${(summary.glossary || []).map(g => `<div><strong>${escapeHTML(g.english)}</strong><span>${escapeHTML(g.chinese)}</span><p>${escapeHTML(g.explanation)}</p></div>`).join("")}</section><small>* 仅为根据课堂内容推测的复习方向，不代表教授承诺的考试范围。</small></article>`;
+  }
+
+  async function renderQA() {
+    breadcrumb.textContent = "复习 / DeepSeek 问答"; const c = course();
+    if (!c) { main.innerHTML = empty("先选择一门课程", "问答只会引用你自己的课堂逐字稿。"); return; }
+    try { state.chat = await api(`/api/courses/${c.id}/chat${state.currentLectureID ? `?lectureID=${state.currentLectureID}` : ""}`); } catch {}
+    main.innerHTML = `<section class="page qa-page"><header class="page-head"><div><span class="eyebrow">GROUNDED Q&A</span><h1>只依据教授说过的话回答。</h1><p>每条回答都应带课堂和时间引用；证据不足时会明确说明。</p></div></header><div class="scope-switch"><button class="is-active">整门课程</button><span>${escapeHTML(c.name)}</span></div><div class="chat-stream">${state.chat.map(m => `<article class="chat ${m.role}"><span>${m.role === "user" ? "YOU" : "DEEPSEEK"}</span><p>${escapeHTML(m.text)}</p>${(m.citations || []).map(x => `<button data-time="${x.startTime}" data-lecture="${x.lectureID}">${escapeHTML(x.lectureTitle)} · ${fmt(x.startTime)}</button>`).join("")}</article>`).join("") || `<div class="list-empty">例如：教授如何解释这个概念？这节课最重要的三点是什么？</div>`}</div><form id="qa-form" class="question-box"><textarea name="question" required placeholder="向课堂记录提问…"></textarea><button class="button button-primary">${icon("send")}发送</button></form></section>`;
+    document.getElementById("qa-form")?.addEventListener("submit", askQuestion);
+  }
+
+  function renderSettings() {
+    breadcrumb.textContent = "Lecture / 设置与诊断"; const r = state.runtime;
+    main.innerHTML = `<section class="page settings-page"><header class="page-head"><div><span class="eyebrow">LOCAL DIAGNOSTICS</span><h1>课前，确认一切就绪。</h1><p>Lecture 不提供云端录音，也不会把音频发送给 DeepSeek。</p></div></header><div class="diagnostic-list"><div><span>${icon("mic")}麦克风与本地识别</span><strong>${r.speechAvailable ? "可用" : "需检查"}</strong></div><div><span>${icon("external")}英文 → 简体中文</span><strong>${r.translationAvailable ? "可用" : "需下载语言"}</strong></div><div><span>${icon("lock")}DeepSeek API</span><strong>${r.deepSeekConfigured ? "已存入钥匙串" : "尚未配置"}</strong></div><div><span>${icon("database")}本地资料库</span><strong>~/Library/Application Support/Lecture</strong></div></div><section class="settings-section"><div><span class="eyebrow">MACOS KEYCHAIN</span><h2>DeepSeek 密钥</h2><p>网页只负责提交；密钥由原生助手直接写入 macOS 钥匙串，浏览器不会保存。</p></div><div>${button(r.deepSeekConfigured ? "更换密钥" : "保存密钥", "key", "button-primary")} ${r.deepSeekConfigured ? button("测试连接", "test-key") + button("删除", "delete-key", "button-danger") : ""}</div></section></section>`;
+  }
+
+  async function action(value) {
+    try {
+      if (value === "new-course") openCourseDialog();
+      else if (value.startsWith("edit-course:")) openCourseDialog(state.courses.find(c => c.id === value.split(":")[1]));
+      else if (value.startsWith("course:")) { state.currentCourseID = value.split(":")[1]; const first = state.lectures.find(l => l.courseID === state.currentCourseID); if (first) { state.currentLectureID = first.id; setRoute("detail"); } else toast("这门课还没有课堂记录"); }
+      else if (value === "start") { const c = course(); if (!c) return; await api("/api/lectures/start", { method: "POST", body: JSON.stringify({ courseID: c.id }) }); toast("课堂已开始；关闭网页也会继续录音"); await reload(); }
+      else if (value === "stop") { const lecture = await api("/api/lectures/stop", { method: "POST", body: "{}" }); state.currentLectureID = lecture.id; toast("录音已保存，课后处理已开始"); await reload(); }
+      else if (value === "marker") { await api("/api/markers", { method: "POST", body: JSON.stringify({ label: "课堂重点" }) }); toast("已标记当前时间"); }
+      else if (value === "retry") { await api(`/api/lectures/${state.currentLectureID}/retry`, { method: "POST", body: "{}" }); toast("已重新开始课后处理"); }
+      else if (value === "key") document.getElementById("key-dialog").showModal();
+      else if (value === "test-key") { await api("/api/deepseek/test", { method: "POST", body: "{}" }); toast("DeepSeek 连接正常"); }
+      else if (value === "delete-key") { if (confirm("确定从 macOS 钥匙串删除 DeepSeek 密钥？")) { await api("/api/deepseek/key", { method: "DELETE" }); await reload(); } }
+      else if (value === "back-history") setRoute("history");
+      else if (value === "open-summary") setRoute("summary");
+      else if (value === "view-history") setRoute("history");
+    } catch (error) { toast(error.message, true); }
+  }
+
+  function openCourseDialog(c = null) {
+    const form = document.getElementById("course-form"); form.reset(); form.elements.id.value = c?.id || ""; form.elements.name.value = c?.name || ""; form.elements.code.value = c?.code || ""; form.elements.professor.value = c?.professor || ""; form.elements.semester.value = c?.semester || ""; document.getElementById("course-dialog-title").textContent = c ? "编辑课程" : "新建课程"; document.getElementById("delete-course").classList.toggle("is-hidden", !c); document.getElementById("course-dialog").showModal();
+  }
+
+  async function saveCourse(event) {
+    event.preventDefault(); const form = new FormData(event.currentTarget); const id = form.get("id") || crypto.randomUUID(); const existing = state.courses.find(c => c.id === id);
+    const body = { id, name: form.get("name"), code: form.get("code") || null, professor: form.get("professor") || "", semester: form.get("semester") || null, vocabulary: existing?.vocabulary || [], createdAt: existing?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+    try { await api(existing ? `/api/courses/${id}` : "/api/courses", { method: existing ? "PUT" : "POST", body: JSON.stringify(body) }); document.getElementById("course-dialog").close(); await reload(); toast("课程已保存"); } catch (e) { toast(e.message, true); }
+  }
+
+  async function askQuestion(event) { event.preventDefault(); const form = new FormData(event.currentTarget); const question = String(form.get("question") || "").trim(); if (!question) return; try { await api("/api/qa", { method: "POST", body: JSON.stringify({ question, courseID: course().id, lectureID: state.currentLectureID || null }) }); await renderQA(); } catch (e) { toast(e.message, true); } }
+  async function reload() { state.courses = await api("/api/courses"); state.lectures = await api("/api/lectures"); state.runtime = await api("/api/state"); render(); }
+
+  document.addEventListener("click", event => { const route = event.target.closest("[data-route]")?.dataset.route; if (route) setRoute(route); const act = event.target.closest("[data-action]")?.dataset.action; if (act) action(act); const timed = event.target.closest("[data-time]"); if (timed) { const audio = document.getElementById("audio"); if (audio) { audio.currentTime = Number(timed.dataset.time); audio.play(); } else if (timed.dataset.lecture) { state.currentLectureID = timed.dataset.lecture; setRoute("detail"); } } });
+  document.querySelectorAll("[data-close-dialog]").forEach(b => b.addEventListener("click", () => b.closest("dialog").close()));
+  document.getElementById("course-form").addEventListener("submit", saveCourse);
+  document.getElementById("delete-course").addEventListener("click", async () => { const id = document.getElementById("course-form").elements.id.value; if (id && confirm("删除课程会同时删除课堂、逐字稿和总结。确定继续？")) { await api(`/api/courses/${id}`, { method: "DELETE" }); document.getElementById("course-dialog").close(); await reload(); } });
+  document.getElementById("key-form").addEventListener("submit", async event => { event.preventDefault(); const value = new FormData(event.currentTarget).get("apiKey"); try { await api("/api/deepseek/key", { method: "POST", body: JSON.stringify({ apiKey: value }) }); event.currentTarget.reset(); document.getElementById("key-dialog").close(); toast("密钥已安全保存并通过连接测试"); await reload(); } catch (e) { toast(e.message, true); } });
+  window.addEventListener("hashchange", () => { state.route = location.hash.slice(1) || "live"; render(); });
+  document.addEventListener("keydown", e => { if (/^[1-5]$/.test(e.key) && !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) setRoute(["live","history","summary","qa","settings"][Number(e.key)-1]); });
+  setInterval(() => { const clock = document.getElementById("clock"); const now = new Date(); clock.dateTime = now.toISOString(); clock.textContent = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }); }, 1000);
+
+  bootstrap();
+})();

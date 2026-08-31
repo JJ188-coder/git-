@@ -47,7 +47,19 @@ let package = Package(
         .executableTarget(
             name: "LectureTests",
             dependencies: ["LectureCore", "LectureServer", "LectureSpeech"],
-            path: "Tests"
+            path: "Tests",
+            exclude: ["ServerSmoke", "KeyImportSmoke"],
+            sources: ["main.swift", "LectureSpeechTests/LectureSpeechTestSuite.swift"]
+        ),
+        .executableTarget(
+            name: "LectureServerSmoke",
+            dependencies: ["LectureCore", "LectureServer"],
+            path: "Tests/ServerSmoke"
+        ),
+        .executableTarget(
+            name: "LectureKeyImportSmoke",
+            dependencies: ["LectureCore"],
+            path: "Tests/KeyImportSmoke"
         ),
     ],
     swiftLanguageModes: [.v5]

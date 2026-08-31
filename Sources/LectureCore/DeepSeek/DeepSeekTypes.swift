@@ -1,0 +1,121 @@
+import Foundation
+
+public struct DeepSeekConnectionStatus: Codable, Sendable {
+    public let isConnected: Bool
+    public let message: String
+    public init(isConnected: Bool, message: String) { self.isConnected = isConnected; self.message = message }
+}
+
+public struct DeepSeekChunkPolicy: Sendable {
+    public var maxCharacters: Int
+    public var maxDuration: TimeInterval
+    public init(maxCharacters: Int = 10_000, maxDuration: TimeInterval = 900) { self.maxCharacters = maxCharacters; self.maxDuration = maxDuration }
+}
+
+public struct DeepSeekTranscriptUnit: Codable, Hashable, Sendable {
+    public var id: String
+    public var sourceSegmentID: String
+    public var startTime: TimeInterval
+    public var endTime: TimeInterval
+    public var text: String
+}
+
+public struct DeepSeekTranscriptChunk: Codable, Hashable, Sendable {
+    public var units: [DeepSeekTranscriptUnit]
+}
+
+public enum DeepSeekTranscriptChunker {
+    public static func chunks(from segments: [TranscriptSegment], policy: DeepSeekChunkPolicy = .init()) -> [DeepSeekTranscriptChunk] {
+        var units: [DeepSeekTranscriptUnit] = []
+        for segment in segments where segment.isFinal {
+            let sentences = splitSentences(segment.text)
+            for (offset, sentence) in sentences.enumerated() {
+                units.append(.init(id: "\(segment.id)-\(offset)", sourceSegmentID: segment.id, startTime: segment.startTime, endTime: segment.endTime, text: sentence))
+            }
+        }
+        var result: [DeepSeekTranscriptChunk] = []
+        var current: [DeepSeekTranscriptUnit] = []
+        for unit in units {
+            let characters = current.reduce(0) { $0 + $1.text.count } + unit.text.count
+            let duration = max(current.first?.startTime ?? unit.startTime, unit.endTime) - min(current.first?.startTime ?? unit.startTime, unit.startTime)
+            if !current.isEmpty && (characters > policy.maxCharacters || duration > policy.maxDuration) { result.append(.init(units: current)); current = [] }
+            current.append(unit)
+        }
+        if !current.isEmpty { result.append(.init(units: current)) }
+        return result
+    }
+
+    private static func splitSentences(_ value: String) -> [String] {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        let regex = try! NSRegularExpression(pattern: #"[^.!?。！？]+[.!?。！？]?"#)
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            guard let range = Range(match.range, in: text) else { return nil }
+            let sentence = text[range].trimmingCharacters(in: .whitespacesAndNewlines)
+            return sentence.isEmpty ? nil : sentence
+        }
+    }
+}
+
+public struct GroundingEvidence: Codable, Hashable, Sendable {
+    public var id: String
+    public var lectureID: String
+    public var lectureTitle: String
+    public var segmentID: String
+    public var startTime: TimeInterval
+    public var endTime: TimeInterval
+    public var text: String
+    public init(id: String, lectureID: String, lectureTitle: String, segmentID: String, startTime: TimeInterval, endTime: TimeInterval, text: String) {
+        self.id = id; self.lectureID = lectureID; self.lectureTitle = lectureTitle; self.segmentID = segmentID; self.startTime = startTime; self.endTime = endTime; self.text = text
+    }
+}
+
+public struct GroundedAnswer: Codable, Sendable {
+    public var text: String
+    public var citations: [Citation]
+    public var foundEvidence: Bool
+}
+
+public enum DeepSeekError: Error, CustomStringConvertible {
+    case missingAPIKey
+    case invalidResponse(String)
+    case http(Int, String)
+    case unsupportedCitation(String)
+    public var description: String {
+        switch self {
+        case .missingAPIKey: return "请先在设置中保存 DeepSeek API Key"
+        case .invalidResponse(let message): return "DeepSeek 返回格式异常：" + SecretRedactor.redact(message)
+        case .http(let code, let message): return "DeepSeek 请求失败（\(code)）：" + SecretRedactor.redact(message)
+        case .unsupportedCitation(let id): return "DeepSeek 返回了不存在的引用：" + id
+        }
+    }
+}
+
+public enum DeepSeekResponseParser {
+    public static func studySummary(from raw: String) throws -> StudySummary {
+        try decodeJSON(StudySummary.self, from: raw)
+    }
+
+    public static func groundedAnswer(from raw: String, evidence: [GroundingEvidence]) throws -> GroundedAnswer {
+        struct Payload: Decodable { let answer: String; let foundEvidence: Bool; let citedEvidenceIDs: [String] }
+        let payload = try decodeJSON(Payload.self, from: raw)
+        let map = Dictionary(uniqueKeysWithValues: evidence.map { ($0.id, $0) })
+        let citations = try payload.citedEvidenceIDs.map { id -> Citation in
+            guard let item = map[id] else { throw DeepSeekError.unsupportedCitation(id) }
+            return Citation(lectureID: item.lectureID, lectureTitle: item.lectureTitle, startTime: item.startTime, segmentID: item.segmentID)
+        }
+        guard payload.foundEvidence == !citations.isEmpty else { throw DeepSeekError.invalidResponse("证据状态与引用不一致") }
+        return GroundedAnswer(text: payload.answer, citations: citations, foundEvidence: payload.foundEvidence)
+    }
+
+    static func decodeJSON<T: Decodable>(_ type: T.Type, from raw: String) throws -> T {
+        var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```") {
+            cleaned = cleaned.replacingOccurrences(of: #"^```(?:json)?\s*"#, with: "", options: .regularExpression)
+            cleaned = cleaned.replacingOccurrences(of: #"\s*```$"#, with: "", options: .regularExpression)
+        }
+        guard let data = cleaned.data(using: .utf8) else { throw DeepSeekError.invalidResponse("不是 UTF-8 文本") }
+        do { return try JSONDecoder().decode(type, from: data) }
+        catch { throw DeepSeekError.invalidResponse(String(describing: error)) }
+    }
+}

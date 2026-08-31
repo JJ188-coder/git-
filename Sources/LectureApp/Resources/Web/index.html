@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f4efe6">
+    <meta name="description" content="Lecture 本地英文课堂记录、翻译、复习与问答工作台">
+    <title>Lecture · 本地课堂助手</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#app-main">跳到主要内容</a>
+
+    <div class="app-shell" id="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand-lockup" aria-label="Lecture 本地课堂助手">
+          <span class="brand-mark" aria-hidden="true">L.</span>
+          <span>
+            <strong>Lecture</strong>
+            <small>本地课堂助手</small>
+          </span>
+        </div>
+
+        <nav class="primary-nav" aria-label="功能页面">
+          <button class="nav-item is-active" type="button" data-route="live" aria-current="page">
+            <svg aria-hidden="true"><use href="#icon-wave"></use></svg>
+            <span>实时课堂</span>
+            <kbd>1</kbd>
+          </button>
+          <button class="nav-item" type="button" data-route="history">
+            <svg aria-hidden="true"><use href="#icon-archive"></use></svg>
+            <span>课程历史</span>
+            <kbd>2</kbd>
+          </button>
+          <button class="nav-item" type="button" data-route="summary">
+            <svg aria-hidden="true"><use href="#icon-document"></use></svg>
+            <span>学习总结</span>
+            <kbd>3</kbd>
+          </button>
+          <button class="nav-item" type="button" data-route="qa">
+            <svg aria-hidden="true"><use href="#icon-chat"></use></svg>
+            <span>DeepSeek 问答</span>
+            <kbd>4</kbd>
+          </button>
+          <button class="nav-item" type="button" data-route="settings">
+            <svg aria-hidden="true"><use href="#icon-sliders"></use></svg>
+            <span>设置与诊断</span>
+            <kbd>5</kbd>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="local-state" id="local-state">
+            <span class="state-lamp" aria-hidden="true"></span>
+            <span>正在连接本机服务</span>
+          </div>
+          <p>音频仅保存在这台 Mac 上</p>
+          <button class="text-action" type="button" data-route="settings">查看数据位置</button>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div class="mobile-brand" aria-hidden="true">
+            <span class="brand-mark">L.</span>
+            <strong>Lecture</strong>
+          </div>
+          <div class="breadcrumb" id="breadcrumb" aria-label="当前位置">课堂 / 实时课堂</div>
+          <div class="topbar-actions">
+            <span class="mode-note" id="mode-note">准备本地数据…</span>
+            <time id="clock" datetime=""></time>
+          </div>
+        </header>
+
+        <main id="app-main" tabindex="-1" aria-live="off"></main>
+      </section>
+
+      <nav class="mobile-nav" aria-label="移动端主导航">
+        <button type="button" class="is-active" data-route="live" aria-current="page">
+          <svg aria-hidden="true"><use href="#icon-wave"></use></svg><span>课堂</span>
+        </button>
+        <button type="button" data-route="history">
+          <svg aria-hidden="true"><use href="#icon-archive"></use></svg><span>历史</span>
+        </button>
+        <button type="button" data-route="summary">
+          <svg aria-hidden="true"><use href="#icon-document"></use></svg><span>总结</span>
+        </button>
+        <button type="button" data-route="qa">
+          <svg aria-hidden="true"><use href="#icon-chat"></use></svg><span>问答</span>
+        </button>
+        <button type="button" data-route="settings">
+          <svg aria-hidden="true"><use href="#icon-sliders"></use></svg><span>设置</span>
+        </button>
+      </nav>
+    </div>
+
+    <dialog class="modal" id="course-dialog" aria-labelledby="course-dialog-title">
+      <form method="dialog" id="course-form">
+        <header class="modal-head">
+          <div>
+            <span class="eyebrow">COURSE RECORD</span>
+            <h2 id="course-dialog-title">新建课程</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="关闭">
+            <svg aria-hidden="true"><use href="#icon-close"></use></svg>
+          </button>
+        </header>
+        <input type="hidden" name="id">
+        <div class="field-grid">
+          <label class="field field-wide">
+            <span>课程名称 <em>必填</em></span>
+            <input name="name" autocomplete="off" required placeholder="例如 Microeconomic Theory">
+          </label>
+          <label class="field">
+            <span>课程代码</span>
+            <input name="code" autocomplete="off" placeholder="例如 ECON-UA 11">
+          </label>
+          <label class="field">
+            <span>教授姓名</span>
+            <input name="professor" autocomplete="off" placeholder="例如 David Miller">
+          </label>
+          <label class="field field-wide">
+            <span>学期</span>
+            <input name="semester" autocomplete="off" placeholder="例如 Fall 2026">
+          </label>
+        </div>
+        <footer class="modal-actions">
+          <button class="button button-quiet danger-action is-hidden" id="delete-course" type="button">删除课程</button>
+          <span class="modal-spacer"></span>
+          <button class="button button-quiet" type="button" data-close-dialog>取消</button>
+          <button class="button button-primary" type="submit">保存课程</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="modal modal-compact" id="key-dialog" aria-labelledby="key-dialog-title">
+      <form method="dialog" id="key-form">
+        <header class="modal-head">
+          <div>
+            <span class="eyebrow">MACOS KEYCHAIN</span>
+            <h2 id="key-dialog-title">更换 DeepSeek 密钥</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-dialog aria-label="关闭">
+            <svg aria-hidden="true"><use href="#icon-close"></use></svg>
+          </button>
+        </header>
+        <p class="modal-copy">密钥会直接交给本机助手并写入 macOS 钥匙串；网页不会保存或再次显示完整内容。</p>
+        <label class="field field-wide">
+          <span>DeepSeek API Key</span>
+          <input name="apiKey" type="password" autocomplete="new-password" spellcheck="false" required placeholder="sk-••••••••••••••••">
+        </label>
+        <footer class="modal-actions">
+          <button class="button button-quiet" type="button" data-close-dialog>取消</button>
+          <button class="button button-primary" type="submit">安全保存并测试</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="modal modal-compact" id="confirm-dialog" aria-labelledby="confirm-dialog-title">
+      <form method="dialog">
+        <header class="modal-head">
+          <div>
+            <span class="eyebrow">CONFIRM ACTION</span>
+            <h2 id="confirm-dialog-title">确认操作</h2>
+          </div>
+        </header>
+        <p class="modal-copy" id="confirm-dialog-copy"></p>
+        <footer class="modal-actions">
+          <button class="button button-quiet" value="cancel">取消</button>
+          <button class="button button-danger" value="confirm">确认删除</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <svg class="svg-sprite" aria-hidden="true" focusable="false">
+      <symbol id="icon-wave" viewBox="0 0 24 24"><path d="M4 13v-2m4 6V7m4 13V4m4 13V7m4 6v-2"/></symbol>
+      <symbol id="icon-archive" viewBox="0 0 24 24"><path d="M4 7h16M5 7v12h14V7M3 4h18v3H3zM9 11h6"/></symbol>
+      <symbol id="icon-document" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6zM14 3v4h4M9 11h6M9 15h6M9 19h4"/></symbol>
+      <symbol id="icon-chat" viewBox="0 0 24 24"><path d="M4 5h16v12H9l-5 4zM8 9h8M8 13h5"/></symbol>
+      <symbol id="icon-sliders" viewBox="0 0 24 24"><path d="M4 7h8m4 0h4M4 17h4m4 0h8M12 4v6M8 14v6"/></symbol>
+      <symbol id="icon-record" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/></symbol>
+      <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+      <symbol id="icon-marker" viewBox="0 0 24 24"><path d="M7 3h10v18l-5-3-5 3z"/></symbol>
+      <symbol id="icon-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+      <symbol id="icon-back" viewBox="0 0 24 24"><path d="M19 12H5m5-5-5 5 5 5"/></symbol>
+      <symbol id="icon-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+      <symbol id="icon-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+      <symbol id="icon-rewind" viewBox="0 0 24 24"><path d="M11 7 5 12l6 5v-4c4 0 6 2 8 5-1-7-4-10-8-10z"/></symbol>
+      <symbol id="icon-forward" viewBox="0 0 24 24"><path d="m13 7 6 5-6 5v-4c-4 0-6 2-8 5 1-7 4-10 8-10z"/></symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 20h14"/></symbol>
+      <symbol id="icon-retry" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M18 10a7 7 0 0 0-12-3L4 10m2 4a7 7 0 0 0 12 3l2-3"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M12 3 2.5 20h19zM12 9v5M12 17v.2"/></symbol>
+      <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+      <symbol id="icon-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></symbol>
+      <symbol id="icon-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+      <symbol id="icon-external" viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-9 9M18 13v6H5V6h6"/></symbol>
+      <symbol id="icon-send" viewBox="0 0 24 24"><path d="m3 11 18-8-7 18-3-7zM11 14l10-11"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+      <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="1"/><path d="M8 3v4M16 3v4M4 10h16"/></symbol>
+      <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    </svg>
+
+    <noscript>Lecture 的本地网页需要启用 JavaScript 才能显示实时字幕和历史记录。</noscript>
+  </body>
+</html>

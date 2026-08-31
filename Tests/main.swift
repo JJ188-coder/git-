@@ -1,5 +1,6 @@
 import Foundation
 import LectureCore
+import LectureServer
 
 struct TestFailure: Error, CustomStringConvertible {
     let description: String
@@ -25,6 +26,211 @@ func testDomainModels() throws {
     try expect(!LectureStatus.completed.canTransition(to: .recording), "completed must not restart")
     let redacted = SecretRedactor.redact("Authorization: Bearer sk-example-secret and api_key=sk-second-secret")
     try expect(!redacted.contains("sk-example-secret") && redacted.contains("[REDACTED]"), "secret redaction")
+    let strict = SecretRedactor.redact(#"{\"api_key\":\"not-prefixed-secret-value\"} DEEPSEEK_API_KEY=plain-secret Authorization: Bearer opaque-token"#)
+    try expect(!strict.contains("not-prefixed-secret-value"), "JSON API key should be redacted")
+    try expect(!strict.contains("plain-secret"), "environment API key should be redacted")
+    try expect(!strict.contains("opaque-token"), "bearer token should be redacted")
+}
+
+func testKeychainStore() throws {
+    let service = "com.jiyuanyi.Lecture.Tests." + UUID().uuidString
+    let store = DeepSeekKeychainStore(service: service)
+    defer { try? store.deleteAPIKey() }
+
+    try expect(try store.loadAPIKey() == nil, "isolated Keychain service should start empty")
+    try store.saveAPIKey("  sk-test-first-value-123456  ")
+    try expect(try store.loadAPIKey() == "sk-test-first-value-123456", "Keychain should trim and load the saved key")
+    try store.saveAPIKey("sk-test-replacement-value-654321")
+    try expect(try store.loadAPIKey() == "sk-test-replacement-value-654321", "Keychain save should replace the existing key")
+    try store.deleteAPIKey()
+    try expect(try store.loadAPIKey() == nil, "Keychain delete should remove the key")
+}
+
+func testTranscriptChunking() throws {
+    let segments = [
+        TranscriptSegment(id: "s1", lectureID: "lecture-1", source: .reviewedEnglish, startTime: 0, endTime: 20, text: "First sentence. Second sentence.", isFinal: true),
+        TranscriptSegment(id: "s2", lectureID: "lecture-1", source: .reviewedEnglish, startTime: 25, endTime: 30, text: "Third sentence.", isFinal: true),
+    ]
+    let chunks = DeepSeekTranscriptChunker.chunks(
+        from: segments,
+        policy: DeepSeekChunkPolicy(maxCharacters: 22, maxDuration: 12)
+    )
+    let units = chunks.flatMap(\.units)
+    try expect(units.map(\.text) == ["First sentence.", "Second sentence.", "Third sentence."], "chunking must preserve complete sentences")
+    try expect(units.map(\.sourceSegmentID) == ["s1", "s1", "s2"], "chunking must retain source segment identifiers")
+    try expect(units[0].startTime == 0 && units[1].endTime == 20, "split sentences should retain the source time range")
+    try expect(chunks.count == 3, "character and time limits should create safe boundaries")
+}
+
+func testStructuredResponseParsing() throws {
+    let summaryJSON = """
+    ```json
+    {
+      "overview": "Consumer choice under scarcity.",
+      "coreConcepts": ["Budget constraint"],
+      "definitions": ["MRS is the slope of an indifference curve."],
+      "professorExamples": ["Coffee and tea"],
+      "professorEmphasis": ["Diminishing MRS"],
+      "possibleExamTopics": ["Derive the tangency condition"],
+      "unresolvedQuestions": ["Corner solutions"],
+      "glossary": [{"english":"Marginal rate of substitution","chinese":"边际替代率","explanation":"Trade-off along an indifference curve"}]
+    }
+    ```
+    """
+    let summary = try DeepSeekResponseParser.studySummary(from: summaryJSON)
+    try expect(summary.overview == "Consumer choice under scarcity.", "summary overview should parse")
+    try expect(summary.glossary.first?.chinese == "边际替代率", "summary glossary should parse")
+
+    let evidence = [
+        GroundingEvidence(id: "ev-1", lectureID: "lecture-1", lectureTitle: "Consumer Choice", segmentID: "s1", startTime: 96, endTime: 104, text: "The MRS diminishes along a convex indifference curve."),
+        GroundingEvidence(id: "ev-2", lectureID: "lecture-2", lectureTitle: "Demand", segmentID: "s9", startTime: 210, endTime: 220, text: "Demand follows from utility maximization."),
+    ]
+    let answer = try DeepSeekResponseParser.groundedAnswer(
+        from: #"{"answer":"教授将其解释为无差异曲线斜率。","foundEvidence":true,"citedEvidenceIDs":["ev-1"]}"#,
+        evidence: evidence
+    )
+    try expect(answer.citations == [Citation(lectureID: "lecture-1", lectureTitle: "Consumer Choice", startTime: 96, segmentID: "s1")], "grounded answer should map citations from local evidence")
+
+    do {
+        _ = try DeepSeekResponseParser.groundedAnswer(
+            from: #"{"answer":"Unsupported","foundEvidence":true,"citedEvidenceIDs":["invented"]}"#,
+            evidence: evidence
+        )
+        throw TestFailure(description: "invented citations must be rejected")
+    } catch is DeepSeekError {
+        // Expected: model citations may only point to locally supplied evidence.
+    }
+}
+
+final class StubURLProtocol: URLProtocol, @unchecked Sendable {
+    struct Stub {
+        var statusCode: Int
+        var body: Data
+    }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var stubs: [Stub] = []
+    nonisolated(unsafe) private static var observedRequests: [URLRequest] = []
+
+    static func reset() {
+        lock.lock()
+        stubs = []
+        observedRequests = []
+        lock.unlock()
+    }
+
+    static func enqueue(statusCode: Int = 200, body: String) {
+        lock.lock()
+        stubs.append(Stub(statusCode: statusCode, body: Data(body.utf8)))
+        lock.unlock()
+    }
+
+    static func requests() -> [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return observedRequests
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let stub: Stub?
+        Self.lock.lock()
+        Self.observedRequests.append(request)
+        stub = Self.stubs.isEmpty ? nil : Self.stubs.removeFirst()
+        Self.lock.unlock()
+
+        guard let stub, let url = request.url, let response = HTTPURLResponse(url: url, statusCode: stub.statusCode, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"]) else {
+            client?.urlProtocol(self, didFailWithError: TestFailure(description: "missing URL protocol stub"))
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: stub.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+struct StaticAPIKeyProvider: DeepSeekAPIKeyProviding {
+    let value: String?
+    func loadAPIKey() throws -> String? { value }
+}
+
+func makeStubbedSession() -> URLSession {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [StubURLProtocol.self]
+    return URLSession(configuration: configuration)
+}
+
+func completionEnvelope(content: String, finishReason: String = "stop") throws -> String {
+    let object: [String: Any] = [
+        "id": "chatcmpl-test",
+        "choices": [["index": 0, "message": ["role": "assistant", "content": content], "finish_reason": finishReason]],
+    ]
+    return String(data: try JSONSerialization.data(withJSONObject: object), encoding: .utf8)!
+}
+
+func testDeepSeekRequestShapeAndRedaction() async throws {
+    StubURLProtocol.reset()
+    let key = "sk-test-request-shape-1234567890"
+    StubURLProtocol.enqueue(body: try completionEnvelope(content: "OK"))
+    let client = DeepSeekClient(keyProvider: StaticAPIKeyProvider(value: key), session: makeStubbedSession())
+    let status = try await client.testConnection()
+    try expect(status.isConnected, "connectivity response should report success")
+
+    guard let request = StubURLProtocol.requests().first else { throw TestFailure(description: "DeepSeek request was not emitted") }
+    try expect(request.url?.absoluteString == "https://api.deepseek.com/chat/completions", "client must use the official chat completion endpoint")
+    try expect(request.httpMethod == "POST", "DeepSeek request should use POST")
+    try expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer " + key, "DeepSeek request should use bearer authentication")
+    let body = request.httpBody ?? request.httpBodyStream.flatMap { stream -> Data? in
+        stream.open(); defer { stream.close() }
+        var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable { let count = stream.read(&buffer, maxLength: buffer.count); if count <= 0 { break }; data.append(buffer, count: count) }
+        return data
+    }
+    guard let body, let json = try JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+        throw TestFailure(description: "DeepSeek request body should be JSON")
+    }
+    try expect(json["model"] as? String == "deepseek-v4-pro", "client should use the product-level DeepSeek model")
+    try expect(json["stream"] as? Bool == false, "core workflows should request a non-stream response")
+    try expect((json["thinking"] as? [String: Any])?["type"] as? String == "disabled", "structured workflows should disable thinking output")
+
+    StubURLProtocol.enqueue(
+        statusCode: 401,
+        body: #"{"error":{"message":"Authorization: Bearer sk-test-request-shape-1234567890 api_key=sk-test-request-shape-1234567890","type":"authentication_error"}}"#
+    )
+    do {
+        _ = try await client.testConnection()
+        throw TestFailure(description: "HTTP authentication failure should throw")
+    } catch {
+        let description = String(describing: error)
+        try expect(!description.contains(key), "DeepSeek errors must redact API keys")
+        try expect(description.contains("[REDACTED]"), "redacted DeepSeek errors should preserve a safe diagnostic marker")
+    }
+}
+
+func testDeepSeekWorkflows() async throws {
+    StubURLProtocol.reset()
+    let summary = #"{"overview":"Utility maximization","coreConcepts":["MRS"],"definitions":[],"professorExamples":[],"professorEmphasis":[],"possibleExamTopics":[],"unresolvedQuestions":[],"glossary":[] }"#
+    StubURLProtocol.enqueue(body: try completionEnvelope(content: #"{"translations":[{"unitID":"seg-1","chinese":"边际替代率递减。"}]}"#))
+    StubURLProtocol.enqueue(body: try completionEnvelope(content: summary))
+    StubURLProtocol.enqueue(body: try completionEnvelope(content: #"{"answer":"教授说边际替代率沿凸无差异曲线递减。","foundEvidence":true,"citedEvidenceIDs":["ev-1"]}"#))
+
+    let client = DeepSeekClient(keyProvider: StaticAPIKeyProvider(value: "sk-test-workflow-1234567890"), session: makeStubbedSession())
+    let segment = TranscriptSegment(id: "seg-1", lectureID: "lecture-1", source: .reviewedEnglish, startTime: 10, endTime: 16, text: "The marginal rate of substitution diminishes.", isFinal: true)
+    let corrected = try await client.correctTranslation(englishSegments: [segment], vocabulary: ["marginal rate of substitution"])
+    try expect(corrected.count == 1 && corrected[0].text == "边际替代率递减。", "translation correction should retain parsed Chinese text")
+    try expect(corrected[0].sourceSegmentID == "seg-1" && corrected[0].startTime == 10, "translation correction should retain local source identity and time")
+
+    let studySummary = try await client.generateStudySummary(lectureTitle: "Consumer Choice", transcript: [segment])
+    try expect(studySummary.overview == "Utility maximization", "structured study summary should parse through the client")
+
+    let evidence = [GroundingEvidence(id: "ev-1", lectureID: "lecture-1", lectureTitle: "Consumer Choice", segmentID: "seg-1", startTime: 10, endTime: 16, text: segment.text)]
+    let answer = try await client.answer(question: "教授如何解释 MRS？", evidence: evidence)
+    try expect(answer.citations.first?.startTime == 10, "Q&A should return a playable local timestamp citation")
+    try expect(StubURLProtocol.requests().count == 3, "each workflow should make one focused request for a short transcript")
 }
 
 func testStorage() throws {
@@ -44,6 +250,8 @@ func testStorage() throws {
     try expect(try repository.incompleteLectures().map(\.id) == ["l1"], "recover incomplete lecture")
     let searchIDs = try repository.searchCourses(query: "Wilson").map(\.id)
     try expect(searchIDs == ["c1"], "search professor got " + String(describing: searchIDs))
+    lecture.status = .reviewingEnglish
+    try repository.upsertLecture(lecture)
     lecture.status = .completed
     try repository.upsertLecture(lecture)
     try expect(try repository.transcripts(lectureID: "l1", source: .liveEnglish).count == 1, "transcript persisted")
@@ -53,15 +261,52 @@ func testStorage() throws {
     try expect(try repository.listLectures(courseID: "c1").isEmpty, "course delete cascades")
 }
 
-let tests: [(String, () throws -> Void)] = [
-    ("domain", testDomainModels),
-    ("storage", testStorage),
+final class FakeRuntime: LectureRuntimeControlling, @unchecked Sendable {
+    func runtimeSnapshot() throws -> RuntimeSnapshot { RuntimeSnapshot(deepSeekConfigured: true) }
+    func startLecture(courseID: String, title: String?) async throws -> LectureRecord { LectureRecord(courseID: courseID, title: title ?? "Class", status: .recording) }
+    func stopLecture() async throws -> LectureRecord { LectureRecord(courseID: "c", title: "Class", status: .reviewingEnglish) }
+    func addMarker(label: String?) throws -> LectureMarker { LectureMarker(lectureID: "l", time: 1) }
+    func retryProcessing(lectureID: String) async throws {}
+    func answer(question: String, courseID: String, lectureID: String?) async throws -> ChatMessage { ChatMessage(courseID: courseID, lectureID: lectureID, role: .assistant, text: "answer") }
+    func saveDeepSeekKey(_ key: String) async throws {}
+    func deleteDeepSeekKey() throws {}
+    func testDeepSeek() async throws -> Bool { true }
+}
+
+func testServerRouter() async throws {
+    let repository = try SQLiteLectureRepository(databaseURL: URL(fileURLWithPath: ":memory:"))
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try Data("hello".utf8).write(to: root.appendingPathComponent("index.html"))
+    let router = LectureAPIRouter(repository: repository, runtime: FakeRuntime(), token: "secret-token", resourcesRoot: root)
+    let unauthorized = await router.handle(HTTPRequest(method: "GET", path: "/api/health"))
+    try expect(unauthorized.status == 401, "server must require session token")
+    let health = await router.handle(HTTPRequest(method: "GET", path: "/api/health", headers: ["x-lecture-token": "secret-token"]))
+    try expect(health.status == 200, "authorized health request")
+    let page = await router.handle(HTTPRequest(method: "GET", path: "/", query: ["token": "secret-token"]))
+    try expect(page.status == 200 && String(data: page.body, encoding: .utf8) == "hello", "authorized static page")
+}
+
+let tests: [(String, () async throws -> Void)] = [
+    ("domain", { try testDomainModels() }),
+    ("storage", { try testStorage() }),
+    ("keychain", { try testKeychainStore() }),
+    ("chunking", { try testTranscriptChunking() }),
+    ("structured parsing", { try testStructuredResponseParsing() }),
+    ("DeepSeek request and redaction", testDeepSeekRequestShapeAndRedaction),
+    ("DeepSeek workflows", testDeepSeekWorkflows),
+    ("server router", testServerRouter),
+    ("native speech helpers", { try testLectureSpeech() }),
 ]
 
-var failures = 0
-for (name, test) in tests {
-    do { try test(); print("✓ \(name)") }
-    catch { failures += 1; print("✗ \(name): \(error)") }
+Task {
+    var failures = 0
+    for (name, test) in tests {
+        do { try await test(); print("✓ \(name)") }
+        catch { failures += 1; print("✗ \(name): \(error)") }
+    }
+    if failures > 0 { exit(1) }
+    print("All \(tests.count) test groups passed")
+    exit(0)
 }
-if failures > 0 { exit(1) }
-print("All \(tests.count) test groups passed")
+dispatchMain()
