@@ -20,9 +20,21 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
     private var volatileEnglishValue = ""
     private var volatileChineseValue = ""
     private var statusMessageValue: String?
+    private var operationInProgress = false
+    private var speechAvailableValue = false
+    private var translationAvailableValue = false
 
     init(repository: LectureRepository, paths: AppPaths) {
         self.repository = repository; self.paths = paths; deepSeek = DeepSeekClient(keyProvider: keychain)
+        Task { [weak self] in
+            guard let self else { return }
+            let speechAvailable = (try? await SpeechAssetManager.resolvedLocale()) != nil
+            let translationAvailable = await translation.isAvailable()
+            self.withState {
+                self.speechAvailableValue = speechAvailable
+                self.translationAvailableValue = translationAvailable
+            }
+        }
     }
 
     private func withState<T>(_ body: () throws -> T) rethrows -> T {
@@ -30,21 +42,32 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
     }
 
     func runtimeSnapshot() throws -> RuntimeSnapshot {
-        withState { RuntimeSnapshot(recording: recorder.isRecording, activeLectureID: activeLecture?.id, duration: recorder.isRecording ? recorder.duration : durationValue, audioLevel: audioLevelValue, volatileEnglish: volatileEnglishValue, volatileChinese: volatileChineseValue, speechAvailable: true, translationAvailable: true, deepSeekConfigured: (try? keychain.loadAPIKey()) != nil, statusMessage: statusMessageValue) }
+        withState { RuntimeSnapshot(recording: recorder.isRecording, activeLectureID: activeLecture?.id, duration: recorder.isRecording ? recorder.duration : durationValue, audioLevel: audioLevelValue, volatileEnglish: volatileEnglishValue, volatileChinese: volatileChineseValue, speechAvailable: speechAvailableValue, translationAvailable: translationAvailableValue, deepSeekConfigured: (try? keychain.loadAPIKey()) != nil, statusMessage: statusMessageValue) }
     }
 
     func startLecture(courseID: String, title: String?) async throws -> LectureRecord {
+        let canStart = withState { () -> Bool in
+            guard activeLecture == nil, !operationInProgress else { return false }
+            operationInProgress = true
+            return true
+        }
+        guard canStart else { throw CoordinatorError.alreadyRecording }
+        defer { withState { operationInProgress = false } }
         guard await MicrophoneRecorder.requestPermission() else { throw CoordinatorError.microphoneDenied }
-        let alreadyRecording = withState { activeLecture != nil }
-        guard !alreadyRecording else { throw CoordinatorError.alreadyRecording }
         guard let course = try repository.course(id: courseID) else { throw CoordinatorError.missingCourse }
+        try ensureRecordingCapacity()
+        withState { statusMessageValue = "正在准备本地英语识别资源…" }
+        let speechLocale = try await SpeechAssetManager.ensureInstalled(
+            identifier: course.speechLocaleIdentifier
+        )
+        withState { speechAvailableValue = true }
         var lecture = LectureRecord(courseID: courseID, title: title?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? defaultTitle(), status: .recording)
-        let audioURL = paths.audioURL(lectureID: lecture.id, fileExtension: "caf")
+        let audioURL = paths.audioURL(lectureID: lecture.id)
         lecture.audioPath = audioURL.path; try repository.upsertLecture(lecture)
-        let liveSpeech = LiveSpeechTranscriber(vocabulary: course.vocabulary)
+        let liveSpeech = LiveSpeechTranscriber(vocabulary: course.vocabulary, locale: speechLocale)
         withState { activeLecture = lecture; activeCourse = course; speech = liveSpeech; durationValue = 0; volatileEnglishValue = ""; volatileChineseValue = ""; statusMessageValue = "本地录音与英文识别正在运行" }
-        try await liveSpeech.start(lectureID: lecture.id, audioFormat: recorder.inputFormat) { [weak self] update in self?.receive(update) }
         do {
+            try await liveSpeech.start(lectureID: lecture.id, audioFormat: recorder.inputFormat) { [weak self] update in self?.receive(update) }
             try recorder.start(
                 url: audioURL,
                 onBuffer: { [weak liveSpeech] buffer in liveSpeech?.append(buffer) },
@@ -62,15 +85,29 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
     }
 
     func stopLecture() async throws -> LectureRecord {
-        let current = withState { (activeLecture, activeCourse, speech) }
-        guard var lecture = current.0 else { throw CoordinatorError.notRecording }
-        let course = current.1; let liveSpeech = current.2
-        let duration = recorder.stop(); await liveSpeech?.finish()
-        lecture.duration = duration; lecture.endedAt = Date(); lecture.status = .reviewingEnglish; lecture.updatedAt = Date(); try repository.upsertLecture(lecture)
-        withState { durationValue = duration; statusMessageValue = "录音已安全保存，正在本地复核英文" }
-        clearActive(keepStatus: true)
-        Task { [weak self] in await self?.processAfterClass(lecture: lecture, course: course) }
-        return lecture
+        enum StopReservation {
+            case busy
+            case idle
+            case reserved(LectureRecord, Course?, LiveSpeechTranscriber?)
+        }
+        let reservation = withState { () -> StopReservation in
+            guard !operationInProgress else { return .busy }
+            guard let activeLecture else { return .idle }
+            operationInProgress = true
+            return .reserved(activeLecture, activeCourse, speech)
+        }
+        switch reservation {
+        case .busy: throw CoordinatorError.busy
+        case .idle: throw CoordinatorError.notRecording
+        case .reserved(var lecture, let course, let liveSpeech):
+            defer { withState { operationInProgress = false } }
+            let duration = recorder.stop(); await liveSpeech?.finish()
+            lecture.duration = duration; lecture.endedAt = Date(); lecture.status = .reviewingEnglish; lecture.updatedAt = Date(); try repository.upsertLecture(lecture)
+            withState { durationValue = duration; statusMessageValue = "录音已安全保存，正在本地复核英文" }
+            clearActive(keepStatus: true)
+            Task { [weak self] in await self?.processAfterClass(lecture: lecture, course: course) }
+            return lecture
+        }
     }
 
     func addMarker(label: String?) throws -> LectureMarker {
@@ -82,6 +119,13 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
 
     func retryProcessing(lectureID: String) async throws {
         guard let lecture = try repository.lecture(id: lectureID), let course = try repository.course(id: lecture.courseID) else { throw CoordinatorError.missingLecture }
+        let canRetry = withState { () -> Bool in
+            guard !operationInProgress else { return false }
+            operationInProgress = true
+            return true
+        }
+        guard canRetry else { throw CoordinatorError.busy }
+        defer { withState { operationInProgress = false } }
         await processAfterClass(lecture: lecture, course: course)
     }
 
@@ -90,14 +134,23 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
         let evidence = try lectures.flatMap { lecture in
             let reviewed = try repository.transcripts(lectureID: lecture.id, source: .reviewedEnglish)
             let source = reviewed.isEmpty ? try repository.transcripts(lectureID: lecture.id, source: .liveEnglish) : reviewed
-            return source.filter { $0.text.localizedCaseInsensitiveContains(question.components(separatedBy: .whitespaces).first(where: { $0.count > 2 }) ?? question) }.prefix(20).map { GroundingEvidence(id: $0.id, lectureID: lecture.id, lectureTitle: lecture.title, segmentID: $0.id, startTime: $0.startTime, endTime: $0.endTime, text: $0.text) }
+            return source.prefix(160).map { GroundingEvidence(id: $0.id, lectureID: lecture.id, lectureTitle: lecture.title, segmentID: $0.id, startTime: $0.startTime, endTime: $0.endTime, text: $0.text) }
         }
         let user = ChatMessage(courseID: courseID, lectureID: lectureID, role: .user, text: question); try repository.appendChatMessage(user)
         let answer = try await deepSeek.answer(question: question, evidence: evidence)
         let message = ChatMessage(courseID: courseID, lectureID: lectureID, role: .assistant, text: answer.text, citations: answer.citations); try repository.appendChatMessage(message); return message
     }
 
-    func saveDeepSeekKey(_ key: String) async throws { try keychain.saveAPIKey(key); _ = try await deepSeek.testConnection() }
+    func saveDeepSeekKey(_ key: String) async throws {
+        let previous = try keychain.loadAPIKey()
+        do {
+            try keychain.saveAPIKey(key)
+            _ = try await deepSeek.testConnection()
+        } catch {
+            if let previous { try? keychain.saveAPIKey(previous) } else { try? keychain.deleteAPIKey() }
+            throw error
+        }
+    }
     func deleteDeepSeekKey() throws { try keychain.deleteAPIKey() }
     func testDeepSeek() async throws -> Bool { try await deepSeek.testConnection().isConnected }
 
@@ -119,9 +172,16 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
         var lecture = original
         do {
             guard let path = lecture.audioPath else { throw CoordinatorError.missingAudio }
-            if lecture.status != .reviewingEnglish { lecture.status = .reviewingEnglish; lecture.updatedAt = Date(); try repository.upsertLecture(lecture) }
-            let reviewed = try await OfflineDictationTranscriber.review(audioURL: URL(fileURLWithPath: path), lectureID: lecture.id, vocabulary: course?.vocabulary ?? [])
-            for segment in reviewed { try repository.appendTranscript(segment) }
+            let existingReviewed = try repository.transcripts(lectureID: lecture.id, source: .reviewedEnglish)
+            let reviewed: [TranscriptSegment]
+            if existingReviewed.isEmpty {
+                if lecture.status != .reviewingEnglish { lecture.status = .reviewingEnglish; lecture.updatedAt = Date(); try repository.upsertLecture(lecture) }
+                let locale = try await SpeechAssetManager.ensureInstalled(identifier: course?.speechLocaleIdentifier)
+                reviewed = try await OfflineDictationTranscriber.review(audioURL: URL(fileURLWithPath: path), lectureID: lecture.id, vocabulary: course?.vocabulary ?? [], locale: locale)
+                for segment in reviewed { try repository.appendTranscript(segment) }
+            } else {
+                reviewed = existingReviewed
+            }
             lecture.status = .processingDeepSeek; lecture.updatedAt = Date(); try repository.upsertLecture(lecture)
             let base = reviewed.isEmpty ? try repository.transcripts(lectureID: lecture.id, source: .liveEnglish) : reviewed
             if (try? keychain.loadAPIKey()) != nil {
@@ -141,14 +201,20 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
         lecture.updatedAt = checkpoint.createdAt
         try? repository.upsertLecture(lecture)
     }
+    private func ensureRecordingCapacity() throws {
+        let values = try paths.recordings.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        if let available = values.volumeAvailableCapacityForImportantUsage, available < 1_000_000_000 {
+            throw CoordinatorError.lowDiskSpace
+        }
+    }
     private func clearActive(keepStatus: Bool = false) { withState { activeLecture = nil; activeCourse = nil; speech = nil; audioLevelValue = 0; volatileEnglishValue = ""; volatileChineseValue = ""; if !keepStatus { statusMessageValue = nil } } }
     private func defaultTitle() -> String { let formatter = DateFormatter(); formatter.dateFormat = "yyyy-MM-dd HH:mm 课堂"; return formatter.string(from: Date()) }
 }
 
 private enum CoordinatorError: Error, CustomStringConvertible {
-    case microphoneDenied, alreadyRecording, notRecording, missingCourse, missingLecture, missingAudio
+    case microphoneDenied, alreadyRecording, busy, notRecording, missingCourse, missingLecture, missingAudio, lowDiskSpace
     var description: String {
-        switch self { case .microphoneDenied: return "请在系统设置中允许 Lecture 使用麦克风"; case .alreadyRecording: return "已有课堂正在录音"; case .notRecording: return "当前没有正在录音的课堂"; case .missingCourse: return "请先选择课程"; case .missingLecture: return "未找到课堂"; case .missingAudio: return "录音文件不存在" }
+        switch self { case .microphoneDenied: return "请在系统设置中允许 Lecture 使用麦克风"; case .alreadyRecording: return "已有课堂正在录音或正在切换状态"; case .busy: return "Lecture 正在切换课堂状态，请稍后再试"; case .notRecording: return "当前没有正在录音的课堂"; case .missingCourse: return "请先选择课程"; case .missingLecture: return "未找到课堂"; case .missingAudio: return "录音文件不存在"; case .lowDiskSpace: return "可用磁盘空间不足 1 GB，请先清理空间再开始课堂" }
     }
 }
 

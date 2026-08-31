@@ -7,6 +7,7 @@ public struct Course: Codable, Hashable, Sendable, Identifiable {
     public var professor: String
     public var semester: String?
     public var vocabulary: [String]
+    public var speechLocaleIdentifier: String
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -17,6 +18,7 @@ public struct Course: Codable, Hashable, Sendable, Identifiable {
         professor: String,
         semester: String? = nil,
         vocabulary: [String] = [],
+        speechLocaleIdentifier: String = "en-US",
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -26,8 +28,26 @@ public struct Course: Codable, Hashable, Sendable, Identifiable {
         self.professor = professor
         self.semester = semester
         self.vocabulary = vocabulary
+        self.speechLocaleIdentifier = speechLocaleIdentifier
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, code, professor, semester, vocabulary, speechLocaleIdentifier, createdAt, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        code = try values.decodeIfPresent(String.self, forKey: .code)
+        professor = try values.decodeIfPresent(String.self, forKey: .professor) ?? ""
+        semester = try values.decodeIfPresent(String.self, forKey: .semester)
+        vocabulary = try values.decodeIfPresent([String].self, forKey: .vocabulary) ?? []
+        speechLocaleIdentifier = try values.decodeIfPresent(String.self, forKey: .speechLocaleIdentifier) ?? "en-US"
+        createdAt = try values.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try values.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
     }
 }
 
@@ -61,6 +81,8 @@ public enum LectureStatus: String, Codable, CaseIterable, Hashable, Sendable {
              (.processingDeepSeek, .processingDeepSeek),
              (.processingDeepSeek, .completed),
              (.processingDeepSeek, .failed),
+             (.completed, .processingDeepSeek),
+             (.completed, .failed),
              (.failed, .reviewingEnglish),
              (.failed, .failed),
              (.failed, .processingDeepSeek),

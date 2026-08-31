@@ -8,7 +8,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var server: LoopbackHTTPServer?
     private var coordinator: LectureCoordinator?
-    private let keychain = DeepSeekKeychainStore()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureMenu()
@@ -33,7 +32,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor private func launchService() async {
         do {
             KeyFileImporter.importIfPresent(url: AppPaths.live.root.appendingPathComponent(".pending-deepseek-key"))
-            importKeyFromEnvironmentIfNeeded()
             let paths = AppPaths.live
             try paths.createDirectories()
             let repository = try SQLiteLectureRepository(databaseURL: paths.database)
@@ -54,13 +52,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.alertStyle = .critical
             alert.runModal()
         }
-    }
-
-    private func importKeyFromEnvironmentIfNeeded() {
-        guard ((try? keychain.loadAPIKey()) ?? nil) == nil,
-              let value = ProcessInfo.processInfo.environment["LECTURE_DEEPSEEK_API_KEY"],
-              !value.isEmpty else { return }
-        try? keychain.saveAPIKey(value)
     }
 
     private func recoverInterruptedLectures(_ repository: LectureRepository) {

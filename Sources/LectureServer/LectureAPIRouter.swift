@@ -127,7 +127,16 @@ public final class LectureAPIRouter: @unchecked Sendable {
                 var course = try decode(Course.self, from: request.body)
                 course.id = id; course.updatedAt = Date(); try repository.upsertCourse(course)
                 return .json(course)
-            case "DELETE": try repository.deleteCourse(id: id); return .json(["ok": true])
+            case "DELETE":
+                if try runtime.runtimeSnapshot().activeLectureID.map({ activeID in
+                    try repository.lecture(id: activeID)?.courseID == id
+                }) == true {
+                    return .jsonError(status: 409, message: "请先结束这门课正在进行的录音")
+                }
+                let audioPaths = try repository.listLectures(courseID: id).compactMap(\.audioPath)
+                try repository.deleteCourse(id: id)
+                for path in audioPaths { try? FileManager.default.removeItem(atPath: path) }
+                return .json(["ok": true])
             default: break
             }
         }
@@ -148,7 +157,14 @@ public final class LectureAPIRouter: @unchecked Sendable {
                 guard let lecture = try repository.lecture(id: id), let path = lecture.audioPath else { return .jsonError(status: 404, message: "没有录音") }
                 let url = URL(fileURLWithPath: path)
                 guard let data = try? Data(contentsOf: url) else { return .jsonError(status: 404, message: "录音文件不存在") }
-                return HTTPResponse(status: 200, headers: ["Content-Type": "audio/x-m4a", "Accept-Ranges": "bytes"], body: data)
+                let mime: String
+                switch url.pathExtension.lowercased() {
+                case "m4a", "mp4": mime = "audio/mp4"
+                case "caf": mime = "audio/x-caf"
+                case "wav": mime = "audio/wav"
+                default: mime = "application/octet-stream"
+                }
+                return HTTPResponse(status: 200, headers: ["Content-Type": mime], body: data)
             }
         }
         if parts.count == 4, parts[0] == "api", parts[1] == "courses", parts[3] == "chat", request.method == "GET" {

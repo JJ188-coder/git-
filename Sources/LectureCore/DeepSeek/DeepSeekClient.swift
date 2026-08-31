@@ -52,8 +52,23 @@ public final class DeepSeekClient: @unchecked Sendable {
 
     public func answer(question: String, evidence: [GroundingEvidence]) async throws -> GroundedAnswer {
         guard !evidence.isEmpty else { return .init(text: "本地课堂记录中没有找到足够证据。", citations: [], foundEvidence: false) }
-        let raw = try await complete(system: "Answer only from the supplied evidence. If insufficient, say so. Cite only evidence IDs. Return JSON: {\"answer\":\"...\",\"foundEvidence\":true,\"citedEvidenceIDs\":[\"ev-id\"]}.", user: "Question: \(question)\nEvidence:\n" + (try jsonString(evidence)))
-        return try DeepSeekResponseParser.groundedAnswer(from: raw, evidence: evidence)
+        let prompt = "Answer only from the supplied evidence. The question may be Chinese while evidence is English. If insufficient, say so. Cite only evidence IDs. Return JSON: {\"answer\":\"...\",\"foundEvidence\":true,\"citedEvidenceIDs\":[\"ev-id\"]}."
+        let chunks = evidence.chunked(maximum: 120)
+        if chunks.count == 1 {
+            let raw = try await complete(system: prompt, user: "Question: \(question)\nEvidence:\n" + (try jsonString(evidence)))
+            return try DeepSeekResponseParser.groundedAnswer(from: raw, evidence: evidence)
+        }
+        var candidates: [GroundingEvidence] = []
+        for chunk in chunks {
+            let raw = try await complete(system: prompt, user: "Question: \(question)\nEvidence chunk:\n" + (try jsonString(chunk)))
+            let partial = try DeepSeekResponseParser.groundedAnswer(from: raw, evidence: chunk)
+            let ids = Set(partial.citations.compactMap(\.segmentID))
+            candidates.append(contentsOf: chunk.filter { ids.contains($0.segmentID) })
+        }
+        let unique = Array(Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) }).values)
+        guard !unique.isEmpty else { return .init(text: "本地课堂记录中没有找到足够证据。", citations: [], foundEvidence: false) }
+        let raw = try await complete(system: prompt, user: "Question: \(question)\nCandidate evidence:\n" + (try jsonString(unique)))
+        return try DeepSeekResponseParser.groundedAnswer(from: raw, evidence: unique)
     }
 
     private func complete(system: String, user: String, jsonMode: Bool = true) async throws -> String {
@@ -84,5 +99,14 @@ public final class DeepSeekClient: @unchecked Sendable {
     private func format(_ seconds: TimeInterval) -> String { String(format: "%02d:%02d", Int(seconds) / 60, Int(seconds) % 60) }
     private var summaryPrompt: String {
         "Create a faithful Chinese study summary from the transcript. Do not invent facts. Return only JSON with keys overview, coreConcepts, definitions, professorExamples, professorEmphasis, possibleExamTopics, unresolvedQuestions, glossary. glossary items use english, chinese, explanation. Possible exam topics are suggestions, not claims."
+    }
+}
+
+private extension Array {
+    func chunked(maximum: Int) -> [[Element]] {
+        guard maximum > 0 else { return [self] }
+        return stride(from: 0, to: count, by: maximum).map { start in
+            Array(self[start..<Swift.min(start + maximum, count)])
+        }
     }
 }

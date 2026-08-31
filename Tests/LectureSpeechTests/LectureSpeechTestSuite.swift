@@ -41,8 +41,25 @@ public func testLectureSpeech() throws {
     try testConfidenceClassification()
     try testVocabularyNormalization()
     try testSpeechConfigurations()
+    try testLectureEnglishLocaleResolution()
     try testAudioLevels()
     try testCheckpointCadence()
+}
+
+@available(macOS 26.0, *)
+private func testLectureEnglishLocaleResolution() throws {
+    try speechExpect(
+        SpeechAssetManager.requestedLocale(identifier: "en-US").identifier == "en-US",
+        "US English locale"
+    )
+    try speechExpect(
+        SpeechAssetManager.requestedLocale(identifier: "en-GB").identifier == "en-GB",
+        "British English locale"
+    )
+    try speechExpect(
+        SpeechAssetManager.requestedLocale(identifier: "zh-CN").identifier == "en-US",
+        "non-English locale should safely fall back to US English"
+    )
 }
 
 @available(macOS 26.0, *)

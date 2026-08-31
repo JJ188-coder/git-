@@ -125,6 +125,21 @@
             <span>学期</span>
             <input name="semester" autocomplete="off" placeholder="例如 Fall 2026">
           </label>
+          <label class="field field-wide">
+            <span>教授英语口音</span>
+            <select name="speechLocaleIdentifier">
+              <option value="en-US">美式英语</option>
+              <option value="en-GB">英式英语</option>
+              <option value="en-AU">澳大利亚英语</option>
+              <option value="en-CA">加拿大英语</option>
+              <option value="en-IN">印度英语</option>
+            </select>
+          </label>
+          <label class="field field-wide">
+            <span>专业词汇与人名</span>
+            <textarea name="vocabulary" rows="6" spellcheck="false" placeholder="每行一个，例如：&#10;Nash equilibrium&#10;Pareto efficiency&#10;Professor Acemoglu"></textarea>
+            <small>每行一个术语。Lecture 会在实时识别和课后复核时优先参考这些词。</small>
+          </label>
         </div>
         <footer class="modal-actions">
           <button class="button button-quiet danger-action is-hidden" id="delete-course" type="button">删除课程</button>

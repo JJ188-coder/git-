@@ -17,6 +17,8 @@ func testDomainModels() throws {
     let lecture = LectureRecord(id: "lecture-1", courseID: course.id, title: "Consumer Choice", status: .completed)
     let segment = TranscriptSegment(id: "segment-1", lectureID: lecture.id, source: .reviewedEnglish, startTime: 12.5, endTime: 18, text: "Marginal rate of substitution", confidence: 0.82, isFinal: true)
     try expect(!(try JSONEncoder().encode(course)).isEmpty, "course should encode")
+    let legacyCourse = try JSONDecoder().decode(Course.self, from: Data(#"{"id":"legacy","name":"Legacy","professor":"Professor","vocabulary":[],"createdAt":0,"updatedAt":0}"#.utf8))
+    try expect(legacyCourse.speechLocaleIdentifier == "en-US", "legacy courses should default to US English")
     try expect(!(try JSONEncoder().encode(lecture)).isEmpty, "lecture should encode")
     try expect(!(try JSONEncoder().encode(segment)).isEmpty, "segment should encode")
     try expect(!segment.isLowConfidence, "0.82 should not be low confidence")
@@ -24,6 +26,7 @@ func testDomainModels() throws {
     try expect(low.isLowConfidence, "0.54 should be low confidence")
     try expect(LectureStatus.recording.canTransition(to: .reviewingEnglish), "recording should transition to review")
     try expect(!LectureStatus.completed.canTransition(to: .recording), "completed must not restart")
+    try expect(LectureStatus.completed.canTransition(to: .processingDeepSeek), "completed local transcripts should allow later DeepSeek enrichment")
     let redacted = SecretRedactor.redact("Authorization: Bearer sk-example-secret and api_key=sk-second-secret")
     try expect(!redacted.contains("sk-example-secret") && redacted.contains("[REDACTED]"), "secret redaction")
     let strict = SecretRedactor.redact(#"{\"api_key\":\"not-prefixed-secret-value\"} DEEPSEEK_API_KEY=plain-secret Authorization: Bearer opaque-token"#)
@@ -247,6 +250,10 @@ func testStorage() throws {
     try step("append transcript") { try repository.appendTranscript(TranscriptSegment(id: "s1", lectureID: lecture.id, source: .liveEnglish, startTime: 0, endTime: 3, text: "Consumer preferences", confidence: 0.91, isFinal: true)) }
     try step("append marker") { try repository.appendMarker(LectureMarker(id: "m1", lectureID: lecture.id, time: 1.5, label: "Professor emphasis")) }
     try step("append summary") { try repository.appendSummary(SummaryVersion(id: "sum1", lectureID: lecture.id, createdAt: Date(timeIntervalSince1970: 100), content: StudySummary(overview: "Preferences and utility"))) }
+    try step("append course chat") { try repository.appendChatMessage(ChatMessage(id: "chat-course", courseID: course.id, role: .user, text: "whole course")) }
+    try step("append lecture chat") { try repository.appendChatMessage(ChatMessage(id: "chat-lecture", courseID: course.id, lectureID: lecture.id, role: .assistant, text: "single lecture")) }
+    try expect(try repository.chatMessages(courseID: course.id, lectureID: nil).map(\.id) == ["chat-course", "chat-lecture"], "whole-course chat should include course and lecture-scoped history")
+    try expect(try repository.chatMessages(courseID: course.id, lectureID: lecture.id).map(\.id) == ["chat-lecture"], "lecture chat should stay scoped")
     try expect(try repository.incompleteLectures().map(\.id) == ["l1"], "recover incomplete lecture")
     let searchIDs = try repository.searchCourses(query: "Wilson").map(\.id)
     try expect(searchIDs == ["c1"], "search professor got " + String(describing: searchIDs))
@@ -262,7 +269,8 @@ func testStorage() throws {
 }
 
 final class FakeRuntime: LectureRuntimeControlling, @unchecked Sendable {
-    func runtimeSnapshot() throws -> RuntimeSnapshot { RuntimeSnapshot(deepSeekConfigured: true) }
+    var snapshot = RuntimeSnapshot(deepSeekConfigured: true)
+    func runtimeSnapshot() throws -> RuntimeSnapshot { snapshot }
     func startLecture(courseID: String, title: String?) async throws -> LectureRecord { LectureRecord(courseID: courseID, title: title ?? "Class", status: .recording) }
     func stopLecture() async throws -> LectureRecord { LectureRecord(courseID: "c", title: "Class", status: .reviewingEnglish) }
     func addMarker(label: String?) throws -> LectureMarker { LectureMarker(lectureID: "l", time: 1) }
@@ -285,6 +293,24 @@ func testServerRouter() async throws {
     try expect(health.status == 200, "authorized health request")
     let page = await router.handle(HTTPRequest(method: "GET", path: "/", query: ["token": "secret-token"]))
     try expect(page.status == 200 && String(data: page.body, encoding: .utf8) == "hello", "authorized static page")
+
+    let course = Course(id: "audio-course", name: "Audio", professor: "Professor")
+    try repository.upsertCourse(course)
+    let m4a = root.appendingPathComponent("lecture.m4a")
+    try Data([0, 1, 2, 3]).write(to: m4a)
+    try repository.upsertLecture(LectureRecord(id: "audio-lecture", courseID: course.id, title: "Audio", status: .completed, audioPath: m4a.path))
+    let audio = await router.handle(HTTPRequest(method: "GET", path: "/api/lectures/audio-lecture/audio", headers: ["x-lecture-token": "secret-token"]))
+    try expect(audio.status == 200 && audio.headers["Content-Type"] == "audio/mp4", "m4a recording should use a browser-playable MIME type")
+
+    let runtime = FakeRuntime()
+    runtime.snapshot.activeLectureID = "audio-lecture"
+    let protectedRouter = LectureAPIRouter(repository: repository, runtime: runtime, token: "secret-token", resourcesRoot: root)
+    let protectedDelete = await protectedRouter.handle(HTTPRequest(method: "DELETE", path: "/api/courses/audio-course", headers: ["x-lecture-token": "secret-token"]))
+    try expect(protectedDelete.status == 409, "active recording course must not be deleted")
+    try expect(try repository.course(id: course.id) != nil && FileManager.default.fileExists(atPath: m4a.path), "blocked delete must preserve data")
+    runtime.snapshot.activeLectureID = nil
+    let deleted = await protectedRouter.handle(HTTPRequest(method: "DELETE", path: "/api/courses/audio-course", headers: ["x-lecture-token": "secret-token"]))
+    try expect(deleted.status == 200 && !FileManager.default.fileExists(atPath: m4a.path), "course delete should remove original recordings")
 }
 
 let tests: [(String, () async throws -> Void)] = [

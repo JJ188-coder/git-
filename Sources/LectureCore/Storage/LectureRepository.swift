@@ -223,7 +223,7 @@ public final class SQLiteLectureRepository: LectureRepository, @unchecked Sendab
         if let lectureID {
             return try decodeRows("SELECT payload FROM chat_messages WHERE course_id = ? AND lecture_id = ? ORDER BY created_at", [.text(courseID), .text(lectureID)])
         }
-        return try decodeRows("SELECT payload FROM chat_messages WHERE course_id = ? AND lecture_id IS NULL ORDER BY created_at", [.text(courseID)])
+        return try decodeRows("SELECT payload FROM chat_messages WHERE course_id = ? ORDER BY created_at", [.text(courseID)])
     }
 
     private func value(_ string: String?) -> SQLiteValue {
