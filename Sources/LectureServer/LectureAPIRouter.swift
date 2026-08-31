@@ -11,6 +11,7 @@ public protocol LectureRuntimeControlling: Sendable {
     func saveDeepSeekKey(_ key: String) async throws
     func deleteDeepSeekKey() throws
     func testDeepSeek() async throws -> Bool
+    func isDeepSeekConfigured() -> Bool
 }
 
 public extension LectureRuntimeControlling {
@@ -80,7 +81,9 @@ public final class LectureAPIRouter: @unchecked Sendable {
         case ("GET", "/api/health"):
             return .json(["ok": true, "service": true])
         case ("GET", "/api/state"):
-            return .json(try runtime.runtimeSnapshot())
+            var snapshot = try runtime.runtimeSnapshot()
+            snapshot.deepSeekConfigured = runtime.isDeepSeekConfigured()
+            return .json(snapshot)
         case ("GET", "/api/courses"):
             let query = request.query["q"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return .json(query.isEmpty ? try repository.listCourses() : try repository.searchCourses(query: query))

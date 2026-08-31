@@ -23,9 +23,11 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
     private var operationInProgress = false
     private var speechAvailableValue = false
     private var translationAvailableValue = false
+    private var deepSeekConfiguredValue = false
 
     init(repository: LectureRepository, paths: AppPaths) {
         self.repository = repository; self.paths = paths; deepSeek = DeepSeekClient(keyProvider: keychain)
+        deepSeekConfiguredValue = (try? keychain.loadAPIKey()) != nil
         Task { [weak self] in
             guard let self else { return }
             let speechAvailable = (try? await SpeechAssetManager.resolvedLocale()) != nil
@@ -42,8 +44,10 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
     }
 
     func runtimeSnapshot() throws -> RuntimeSnapshot {
-        withState { RuntimeSnapshot(recording: recorder.isRecording, activeLectureID: activeLecture?.id, duration: recorder.isRecording ? recorder.duration : durationValue, audioLevel: audioLevelValue, volatileEnglish: volatileEnglishValue, volatileChinese: volatileChineseValue, speechAvailable: speechAvailableValue, translationAvailable: translationAvailableValue, deepSeekConfigured: (try? keychain.loadAPIKey()) != nil, statusMessage: statusMessageValue) }
+        withState { RuntimeSnapshot(recording: recorder.isRecording, activeLectureID: activeLecture?.id, duration: recorder.isRecording ? recorder.duration : durationValue, audioLevel: audioLevelValue, volatileEnglish: volatileEnglishValue, volatileChinese: volatileChineseValue, speechAvailable: speechAvailableValue, translationAvailable: translationAvailableValue, deepSeekConfigured: deepSeekConfiguredValue, statusMessage: statusMessageValue) }
     }
+
+    func isDeepSeekConfigured() -> Bool { withState { deepSeekConfiguredValue } }
 
     func startLecture(courseID: String, title: String?) async throws -> LectureRecord {
         let canStart = withState { () -> Bool in
@@ -146,12 +150,14 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
         do {
             try keychain.saveAPIKey(key)
             _ = try await deepSeek.testConnection()
+            withState { deepSeekConfiguredValue = true }
         } catch {
             if let previous { try? keychain.saveAPIKey(previous) } else { try? keychain.deleteAPIKey() }
+            withState { deepSeekConfiguredValue = previous != nil }
             throw error
         }
     }
-    func deleteDeepSeekKey() throws { try keychain.deleteAPIKey() }
+    func deleteDeepSeekKey() throws { try keychain.deleteAPIKey(); withState { deepSeekConfiguredValue = false } }
     func testDeepSeek() async throws -> Bool { try await deepSeek.testConnection().isConnected }
 
     private func receive(_ update: TranscriptionUpdate) {

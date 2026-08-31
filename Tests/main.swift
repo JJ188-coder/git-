@@ -316,6 +316,7 @@ final class FakeRuntime: LectureRuntimeControlling, @unchecked Sendable {
     func saveDeepSeekKey(_ key: String) async throws {}
     func deleteDeepSeekKey() throws {}
     func testDeepSeek() async throws -> Bool { true }
+    func isDeepSeekConfigured() -> Bool { snapshot.deepSeekConfigured }
 }
 
 func testServerRouter() async throws {
