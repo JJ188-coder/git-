@@ -249,7 +249,7 @@ public final class LectureAPIRouter: @unchecked Sendable {
 
     private func userMessage(for error: Error) -> String {
         if case RouterError.invalidBody = error { return "请求内容不完整" }
-        let text = String(describing: error)
+        let text = SecretRedactor.redact(String(describing: error))
         return text.isEmpty ? "本地操作失败" : text
     }
 }

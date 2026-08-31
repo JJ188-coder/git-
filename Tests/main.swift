@@ -416,6 +416,21 @@ final class FakeRuntime: LectureRuntimeControlling, @unchecked Sendable {
     func isDeepSeekConfigured() -> Bool { snapshot.deepSeekConfigured }
 }
 
+final class SecretFailingRuntime: LectureRuntimeControlling, @unchecked Sendable {
+    func runtimeSnapshot() throws -> RuntimeSnapshot { RuntimeSnapshot() }
+    func startLecture(courseID: String, title: String?) async throws -> LectureRecord {
+        throw TestFailure(description: "failed URL http://127.0.0.1/?token=opaque-session-secret Authorization: Bearer opaque-api-secret")
+    }
+    func stopLecture() async throws -> LectureRecord { throw TestFailure(description: "unused") }
+    func addMarker(label: String?) throws -> LectureMarker { throw TestFailure(description: "unused") }
+    func retryProcessing(lectureID: String) async throws {}
+    func answer(question: String, courseID: String, lectureID: String?) async throws -> ChatMessage { throw TestFailure(description: "unused") }
+    func saveDeepSeekKey(_ key: String) async throws {}
+    func deleteDeepSeekKey() throws {}
+    func testDeepSeek() async throws -> Bool { false }
+    func isDeepSeekConfigured() -> Bool { false }
+}
+
 func testServerRouter() async throws {
     let repository = try SQLiteLectureRepository(databaseURL: URL(fileURLWithPath: ":memory:"))
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -431,6 +446,17 @@ func testServerRouter() async throws {
     try expect(page.headers["Content-Security-Policy"]?.contains("connect-src 'self'") == true, "local page should have a restrictive CSP")
     try expect(page.headers["Content-Security-Policy"]?.contains("style-src 'self'") == true, "styles should remain external under CSP")
     try expect(page.headers["Content-Security-Policy"]?.contains("unsafe-inline") == false, "CSP must not be weakened for the audio level meter")
+
+    let secretRouter = LectureAPIRouter(repository: repository, runtime: SecretFailingRuntime(), token: "secret-token", resourcesRoot: root)
+    let secretFailure = await secretRouter.handle(HTTPRequest(
+        method: "POST",
+        path: "/api/lectures/start",
+        headers: ["x-lecture-token": "secret-token"],
+        body: Data(#"{"courseID":"anything","title":null}"#.utf8)
+    ))
+    let secretFailureText = String(data: secretFailure.body, encoding: .utf8) ?? ""
+    try expect(secretFailure.status == 500 && secretFailureText.contains("[REDACTED]"), "internal failures should retain a safe diagnostic marker")
+    try expect(!secretFailureText.contains("opaque-session-secret") && !secretFailureText.contains("opaque-api-secret"), "API errors must redact local tokens and bearer secrets")
 
     let course = Course(id: "audio-course", name: "Audio", professor: "Professor")
     try repository.upsertCourse(course)
