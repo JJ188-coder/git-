@@ -119,6 +119,16 @@ func testLectureMarkdownExport() throws {
     let secretLecture = LectureRecord(id: "secret-export", courseID: course.id, title: "Token sk-test-export-secret-123456789", status: .completed)
     let redacted = LectureMarkdownExporter.render(course: course, lecture: secretLecture, transcripts: [], markers: [], summaries: [])
     try expect(redacted.contains("[REDACTED]") && !redacted.contains("sk-test-export-secret"), "the final Markdown artifact should redact credentials from all stored fields")
+
+    let draftPreferredSources = [
+        TranscriptSegment(id: "live-final", lectureID: lecture.id, source: .liveEnglish, startTime: 1, endTime: 2, text: "Final live fallback.", isFinal: true),
+        TranscriptSegment(id: "review-draft", lectureID: lecture.id, source: .reviewedEnglish, startTime: 1, endTime: 2, text: "Draft review.", isFinal: false),
+        TranscriptSegment(id: "live-zh-final", lectureID: lecture.id, source: .liveChinese, startTime: 1, endTime: 2, text: "最终实时中文。", isFinal: true),
+        TranscriptSegment(id: "corrected-draft", lectureID: lecture.id, source: .correctedChinese, startTime: 1, endTime: 2, text: "校正草稿。", isFinal: false),
+    ]
+    let fallback = LectureMarkdownExporter.render(course: course, lecture: lecture, transcripts: draftPreferredSources, markers: [], summaries: [])
+    try expect(fallback.contains("Final live fallback.") && fallback.contains("最终实时中文。"), "draft preferred sources must not suppress finalized live transcript fallbacks")
+    try expect(fallback.contains("### 核心概念") && fallback.contains("### 双语术语表"), "exports should keep every summary field visible even when there is no summary")
 }
 
 func testKeychainStore() throws {
@@ -589,6 +599,12 @@ func testWebSecurityContract() throws {
     try expect(
         appJavaScript.contains("/api/storage") && appJavaScript.contains("/export?token=") && appJavaScript.contains("导出 Markdown 学习档案"),
         "the web UI should display real storage diagnostics and expose lecture Markdown downloads"
+    )
+    try expect(
+        appJavaScript.contains("async function refreshStorage()")
+            && appJavaScript.contains(#"try { state.storage = await api("/api/storage"); } catch {}"#)
+            && !appJavaScript.contains(#"state.runtime = await api("/api/state"); state.storage = await api("/api/storage")"#),
+        "storage diagnostics should remain best-effort and never make the core classroom UI appear disconnected"
     )
 
     let buildScript = try String(

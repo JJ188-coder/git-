@@ -18,21 +18,22 @@ public enum LectureMarkdownExporter {
             "- 时长：\(timestamp(lecture.duration))",
         ]
 
+        lines += ["", "## 学习总结", ""]
         if let summary = summaries.max(by: { $0.createdAt < $1.createdAt })?.content {
-            lines += ["", "## 学习总结", "", safe(summary.overview)]
+            lines.append(summary.overview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "暂无" : safe(summary.overview))
             appendList(title: "核心概念", values: summary.coreConcepts, to: &lines)
             appendList(title: "定义", values: summary.definitions, to: &lines)
             appendList(title: "教授举例", values: summary.professorExamples, to: &lines)
             appendList(title: "教授强调", values: summary.professorEmphasis, to: &lines)
             appendList(title: "可能的复习方向", values: summary.possibleExamTopics, to: &lines)
             appendList(title: "仍待解决的问题", values: summary.unresolvedQuestions, to: &lines)
-            if !summary.glossary.isEmpty {
-                lines += ["", "### 双语术语表", ""]
-                for term in summary.glossary {
-                    let explanation = term.explanation.isEmpty ? "" : " — \(safe(term.explanation))"
-                    lines.append("- **\(safe(term.english))**：\(safe(term.chinese))\(explanation)")
-                }
+            appendGlossary(summary.glossary, to: &lines)
+        } else {
+            lines.append("暂无")
+            for title in ["核心概念", "定义", "教授举例", "教授强调", "可能的复习方向", "仍待解决的问题"] {
+                appendList(title: title, values: [], to: &lines)
             }
+            appendGlossary([], to: &lines)
         }
 
         lines += ["", "## 课堂重点", ""]
@@ -58,13 +59,13 @@ public enum LectureMarkdownExporter {
     }
 
     private static func preferredEnglish(from transcripts: [TranscriptSegment]) -> [TranscriptSegment] {
-        let reviewed = transcripts.filter { $0.source == .reviewedEnglish }
-        return reviewed.isEmpty ? transcripts.filter { $0.source == .liveEnglish } : reviewed
+        let reviewed = transcripts.filter { $0.source == .reviewedEnglish && $0.isFinal }
+        return reviewed.isEmpty ? transcripts.filter { $0.source == .liveEnglish && $0.isFinal } : reviewed
     }
 
     private static func preferredChinese(from transcripts: [TranscriptSegment]) -> [TranscriptSegment] {
-        let corrected = transcripts.filter { $0.source == .correctedChinese }
-        return corrected.isEmpty ? transcripts.filter { $0.source == .liveChinese } : corrected
+        let corrected = transcripts.filter { $0.source == .correctedChinese && $0.isFinal }
+        return corrected.isEmpty ? transcripts.filter { $0.source == .liveChinese && $0.isFinal } : corrected
     }
 
     private static func appendTranscript(
@@ -74,16 +75,27 @@ public enum LectureMarkdownExporter {
     ) {
         lines += ["", "## \(title)", ""]
         if segments.isEmpty { lines.append("暂无"); return }
-        for segment in segments.filter(\.isFinal).sorted(by: { $0.startTime < $1.startTime }) {
+        for segment in segments.sorted(by: { $0.startTime < $1.startTime }) {
             lines.append("[\(timestamp(segment.startTime))] \(safe(segment.text))")
             lines.append("")
         }
     }
 
     private static func appendList(title: String, values: [String], to lines: inout [String]) {
-        guard !values.isEmpty else { return }
         lines += ["", "### \(title)", ""]
-        lines += values.map { "- \(safe($0))" }
+        lines += values.isEmpty ? ["暂无"] : values.map { "- \(safe($0))" }
+    }
+
+    private static func appendGlossary(_ glossary: [GlossaryTerm], to lines: inout [String]) {
+        lines += ["", "### 双语术语表", ""]
+        if glossary.isEmpty {
+            lines.append("暂无")
+            return
+        }
+        for term in glossary {
+            let explanation = term.explanation.isEmpty ? "" : " — \(safe(term.explanation))"
+            lines.append("- **\(safe(term.english))**：\(safe(term.chinese))\(explanation)")
+        }
     }
 
     private static func timestamp(_ seconds: TimeInterval) -> String {

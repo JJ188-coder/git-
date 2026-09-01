@@ -45,6 +45,7 @@
   function icon(name) { return `<svg aria-hidden="true"><use href="#icon-${name}"></use></svg>`; }
   function button(label, action, kind = "button-quiet", disabled = false) { return `<button class="button ${kind}" data-action="${action}" ${disabled ? "disabled" : ""}>${escapeHTML(label)}</button>`; }
   function course() { return state.courses.find(c => c.id === state.currentCourseID) || state.courses[0]; }
+  async function refreshStorage() { try { state.storage = await api("/api/storage"); } catch {} }
 
   function toast(message, danger = false) {
     const region = document.getElementById("toast-region"); const node = document.createElement("div");
@@ -65,7 +66,7 @@
       await api("/api/health"); state.connected = true;
       state.courses = await api("/api/courses"); state.currentCourseID ||= state.courses[0]?.id || null;
       state.lectures = await api("/api/lectures"); state.runtime = await api("/api/state");
-      state.storage = await api("/api/storage");
+      await refreshStorage();
       if (state.runtime.activeLectureID) { state.currentLectureID = state.runtime.activeLectureID; state.detail = await api(`/api/lectures/${state.runtime.activeLectureID}`); }
       modeNote.textContent = "LOCAL · 127.0.0.1"; document.getElementById("local-state").innerHTML = `<span class="state-lamp"></span><span>本机服务已连接</span>`;
     } catch (error) { state.connected = false; modeNote.textContent = "本机服务未连接"; toast(error.message, true); }
@@ -217,7 +218,7 @@
     state.courses = await api("/api/courses");
     state.lectures = await api("/api/lectures");
     state.runtime = await api("/api/state");
-    state.storage = await api("/api/storage");
+    await refreshStorage();
     if (state.runtime.activeLectureID) {
       state.currentLectureID = state.runtime.activeLectureID;
       state.detail = await api(`/api/lectures/${state.runtime.activeLectureID}`);
