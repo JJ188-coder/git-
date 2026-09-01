@@ -48,6 +48,7 @@ final class LectureCoordinator: LectureRuntimeControlling, @unchecked Sendable {
     }
 
     func isDeepSeekConfigured() -> Bool { withState { deepSeekConfiguredValue } }
+    func storageUsage() throws -> LectureStorageUsage { try paths.storageUsage() }
 
     func startLecture(courseID: String, title: String?) async throws -> LectureRecord {
         let canStart = withState { () -> Bool in

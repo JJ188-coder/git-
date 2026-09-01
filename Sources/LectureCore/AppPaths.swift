@@ -1,5 +1,27 @@
 import Foundation
 
+public struct LectureStorageUsage: Codable, Hashable, Sendable {
+    public var totalBytes: Int64
+    public var recordingBytes: Int64
+    public var databaseBytes: Int64
+    public var exportBytes: Int64
+    public var recordingCount: Int
+
+    public init(
+        totalBytes: Int64 = 0,
+        recordingBytes: Int64 = 0,
+        databaseBytes: Int64 = 0,
+        exportBytes: Int64 = 0,
+        recordingCount: Int = 0
+    ) {
+        self.totalBytes = totalBytes
+        self.recordingBytes = recordingBytes
+        self.databaseBytes = databaseBytes
+        self.exportBytes = exportBytes
+        self.recordingCount = recordingCount
+    }
+}
+
 public struct AppPaths: Sendable {
     public let root: URL
     public let database: URL
@@ -53,5 +75,46 @@ public struct AppPaths: Sendable {
         let safe = lectureID.unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : Character("-") }
         let ext = fileExtension.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined()
         return recordings.appendingPathComponent("\(String(safe)).\(ext.isEmpty ? "m4a" : ext)")
+    }
+
+    public func storageUsage(fileManager: FileManager = .default) throws -> LectureStorageUsage {
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+                .fileAllocatedSizeKey,
+                .totalFileAllocatedSizeKey,
+                .fileSizeKey,
+            ]
+        ) else { return LectureStorageUsage() }
+
+        var usage = LectureStorageUsage()
+        let recordingsPrefix = recordings.standardizedFileURL.path + "/"
+        let exportsPrefix = exports.standardizedFileURL.path + "/"
+        let databasePath = database.standardizedFileURL.path
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: [
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+                .fileAllocatedSizeKey,
+                .totalFileAllocatedSizeKey,
+                .fileSizeKey,
+            ])
+            if values.isSymbolicLink == true { enumerator.skipDescendants(); continue }
+            guard values.isRegularFile == true else { continue }
+            let bytes = Int64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? values.fileSize ?? 0)
+            let path = url.standardizedFileURL.path
+            usage.totalBytes += bytes
+            if path.hasPrefix(recordingsPrefix) {
+                usage.recordingBytes += bytes
+                usage.recordingCount += 1
+            } else if path.hasPrefix(exportsPrefix) {
+                usage.exportBytes += bytes
+            } else if path == databasePath || path.hasPrefix(databasePath + "-") {
+                usage.databaseBytes += bytes
+            }
+        }
+        return usage
     }
 }

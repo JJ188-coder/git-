@@ -47,9 +47,9 @@ func testAppPaths() throws {
         let permissions = try FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber
         try expect(permissions?.intValue == 0o700, "private app directory should use owner-only permissions")
     }
-    try Data().write(to: paths.database)
-    try Data().write(to: paths.database.appendingPathExtension("wal"))
-    try Data().write(to: paths.database.appendingPathExtension("shm"))
+    try Data([1]).write(to: paths.database)
+    try Data([2]).write(to: paths.database.appendingPathExtension("wal"))
+    try Data([3]).write(to: paths.database.appendingPathExtension("shm"))
     let legacyRecording = paths.recordings.appendingPathComponent("legacy-recording.m4a")
     try Data("legacy".utf8).write(to: legacyRecording)
     try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: legacyRecording.path)
@@ -61,6 +61,64 @@ func testAppPaths() throws {
     let recordingPermissions = try FileManager.default.attributesOfItem(atPath: legacyRecording.path)[.posixPermissions] as? NSNumber
     try expect(recordingPermissions?.intValue == 0o600, "existing recordings should be migrated to owner-only permissions")
     try expect(paths.audioURL(lectureID: "unsafe/id").lastPathComponent == "unsafe-id.m4a", "recording paths should sanitize identifiers")
+
+    try Data([1, 2, 3, 4]).write(to: paths.exports.appendingPathComponent("notes.md"))
+    let outsideRecording = root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".m4a")
+    defer { try? FileManager.default.removeItem(at: outsideRecording) }
+    try Data(repeating: 9, count: 40_000).write(to: outsideRecording)
+    try FileManager.default.createSymbolicLink(
+        at: paths.recordings.appendingPathComponent("linked-recording.m4a"),
+        withDestinationURL: outsideRecording
+    )
+    let usage = try paths.storageUsage()
+    try expect(usage.totalBytes >= 10, "storage diagnostics should count local database, recording, and export bytes")
+    try expect(usage.recordingCount == 1, "storage diagnostics should count only regular recording files")
+    try expect(usage.recordingBytes < 40_000, "storage diagnostics must skip linked recordings outside the app directory")
+    try expect(usage.databaseBytes > 0 && usage.exportBytes > 0, "storage diagnostics should classify database and export bytes")
+}
+
+func testLectureMarkdownExport() throws {
+    let course = Course(id: "export-course", name: "Microeconomics", code: "ECON-1", professor: "Professor Example")
+    let lecture = LectureRecord(id: "export-lecture", courseID: course.id, title: "Consumer Choice", status: .completed, duration: 95)
+    let transcripts = [
+        TranscriptSegment(id: "en", lectureID: lecture.id, source: .reviewedEnglish, startTime: 12, endTime: 18, text: "The budget constraint matters.", isFinal: true),
+        TranscriptSegment(id: "zh", lectureID: lecture.id, source: .correctedChinese, startTime: 12, endTime: 18, text: "预算约束很重要。", isFinal: true, sourceSegmentID: "en"),
+    ]
+    let olderSummary = SummaryVersion(
+        lectureID: lecture.id,
+        createdAt: Date(timeIntervalSince1970: 1),
+        content: StudySummary(overview: "旧版本摘要")
+    )
+    let summary = SummaryVersion(
+        lectureID: lecture.id,
+        createdAt: Date(timeIntervalSince1970: 2),
+        content: StudySummary(
+            overview: "消费者在约束下选择。",
+            coreConcepts: ["Budget constraint"],
+            definitions: ["预算约束描述可负担的选择。"],
+            professorExamples: ["咖啡与茶的选择。"],
+            professorEmphasis: ["斜率代表相对价格。"],
+            possibleExamTopics: ["画出预算线。"],
+            unresolvedQuestions: ["收入效应如何变化？"],
+            glossary: [GlossaryTerm(english: "budget constraint", chinese: "预算约束", explanation: "可负担集合的边界")]
+        )
+    )
+    let markdown = LectureMarkdownExporter.render(
+        course: course,
+        lecture: lecture,
+        transcripts: transcripts,
+        markers: [LectureMarker(lectureID: lecture.id, time: 14, label: "考试重点")],
+        summaries: [olderSummary, summary]
+    )
+    try expect(markdown.contains("# Consumer Choice") && markdown.contains("Professor Example"), "export should identify the lecture and course")
+    try expect(markdown.contains("[00:12]") && markdown.contains("The budget constraint matters.") && markdown.contains("预算约束很重要。"), "export should preserve bilingual timestamp evidence")
+    try expect(markdown.contains("考试重点") && markdown.contains("消费者在约束下选择。") && markdown.contains("预算约束"), "export should include markers and the latest study summary")
+    try expect(!markdown.contains("旧版本摘要") && markdown.contains("咖啡与茶的选择。") && markdown.contains("收入效应如何变化？"), "export should include every latest-summary section and exclude older versions")
+    try expect(!markdown.lowercased().contains("api key") && !markdown.contains("sk-"), "export must never contain credentials")
+
+    let secretLecture = LectureRecord(id: "secret-export", courseID: course.id, title: "Token sk-test-export-secret-123456789", status: .completed)
+    let redacted = LectureMarkdownExporter.render(course: course, lecture: secretLecture, transcripts: [], markers: [], summaries: [])
+    try expect(redacted.contains("[REDACTED]") && !redacted.contains("sk-test-export-secret"), "the final Markdown artifact should redact credentials from all stored fields")
 }
 
 func testKeychainStore() throws {
@@ -441,6 +499,8 @@ func testServerRouter() async throws {
     try expect(unauthorized.status == 401, "server must require session token")
     let health = await router.handle(HTTPRequest(method: "GET", path: "/api/health", headers: ["x-lecture-token": "secret-token"]))
     try expect(health.status == 200, "authorized health request")
+    let storage = await router.handle(HTTPRequest(method: "GET", path: "/api/storage", headers: ["x-lecture-token": "secret-token"]))
+    try expect(storage.status == 200 && storage.headers["Content-Type"] == "application/json; charset=utf-8", "storage diagnostics should be available to the local page")
     let page = await router.handle(HTTPRequest(method: "GET", path: "/", query: ["token": "secret-token"]))
     try expect(page.status == 200 && String(data: page.body, encoding: .utf8) == "hello", "authorized static page")
     try expect(page.headers["Content-Security-Policy"]?.contains("connect-src 'self'") == true, "local page should have a restrictive CSP")
@@ -479,6 +539,13 @@ func testServerRouter() async throws {
         headers: ["x-lecture-token": "secret-token", "range": "bytes=9-10"]
     ))
     try expect(invalidAudioRange.status == 416 && invalidAudioRange.headers["Content-Range"] == "bytes */4", "unsatisfiable audio ranges should be explicit")
+
+    try repository.appendTranscript(TranscriptSegment(id: "audio-en", lectureID: "audio-lecture", source: .reviewedEnglish, startTime: 2, endTime: 4, text: "Exported evidence.", isFinal: true))
+    let exported = await router.handle(HTTPRequest(method: "GET", path: "/api/lectures/audio-lecture/export", headers: ["x-lecture-token": "secret-token"]))
+    let exportedText = String(data: exported.body, encoding: .utf8) ?? ""
+    try expect(exported.status == 200 && exported.headers["Content-Type"] == "text/markdown; charset=utf-8", "lecture export should be a UTF-8 Markdown download")
+    try expect(exported.headers["Content-Disposition"]?.contains("attachment") == true && exportedText.contains("Exported evidence."), "lecture export should download the stored evidence")
+    try expect(exported.headers["Cache-Control"] == "no-store", "lecture exports should never be cached by the browser")
 
     let runtime = FakeRuntime()
     runtime.snapshot.activeLectureID = "audio-lecture"
@@ -519,6 +586,10 @@ func testWebSecurityContract() throws {
         appJavaScript.contains("state.pendingAudioTime = null; audio.play()"),
         "pending citation time should clear only after the audio element is ready to seek"
     )
+    try expect(
+        appJavaScript.contains("/api/storage") && appJavaScript.contains("/export?token=") && appJavaScript.contains("导出 Markdown 学习档案"),
+        "the web UI should display real storage diagnostics and expose lecture Markdown downloads"
+    )
 
     let buildScript = try String(
         contentsOf: projectRoot.appendingPathComponent("scripts/build-app.sh"),
@@ -542,6 +613,7 @@ func testWebSecurityContract() throws {
 let tests: [(String, () async throws -> Void)] = [
     ("domain", { try testDomainModels() }),
     ("app paths", { try testAppPaths() }),
+    ("lecture Markdown export", { try testLectureMarkdownExport() }),
     ("storage", { try testStorage() }),
     ("storage permissions", { try testFileBackedStoragePermissions() }),
     ("keychain", { try testKeychainStore() }),

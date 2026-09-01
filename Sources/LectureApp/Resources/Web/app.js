@@ -7,7 +7,8 @@
     route: location.hash.slice(1) || "live",
     courses: [], lectures: [], currentCourseID: null, currentLectureID: null,
     runtime: { recording: false, duration: 0, audioLevel: 0, volatileEnglish: "", volatileChinese: "", deepSeekConfigured: false },
-    detail: null, chat: [], qaScope: "course", connected: false, pendingAudioTime: null
+    detail: null, chat: [], qaScope: "course", connected: false, pendingAudioTime: null,
+    storage: { totalBytes: 0, recordingBytes: 0, databaseBytes: 0, exportBytes: 0, recordingCount: 0 }
   };
   const main = document.getElementById("app-main");
   const breadcrumb = document.getElementById("breadcrumb");
@@ -25,6 +26,7 @@
   function escapeHTML(value = "") { return String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
   function fmt(seconds = 0) { const s = Math.max(0, Math.floor(seconds)); return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; }
   function date(value) { try { return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); } catch { return ""; } }
+  function bytes(value = 0) { const units = ["B", "KB", "MB", "GB"]; let amount = Math.max(0, Number(value) || 0), unit = 0; while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; } return `${amount < 10 && unit ? amount.toFixed(1) : Math.round(amount)} ${units[unit]}`; }
   function statusLabel(value) { return ({ ready: "待开始", recording: "录音中", interrupted: "已中断", reviewingEnglish: "正在复核英文", translatingChinese: "正在翻译", processingDeepSeek: "正在生成总结", completed: "已完成", failed: "需要重试" })[value] || value || "未知"; }
   function localeLabel(value) { return ({ "en-US": "美式英语", "en-GB": "英式英语", "en-AU": "澳大利亚英语", "en-CA": "加拿大英语", "en-IN": "印度英语" })[value] || value || "美式英语"; }
   function qualityLabel(quality) {
@@ -63,6 +65,7 @@
       await api("/api/health"); state.connected = true;
       state.courses = await api("/api/courses"); state.currentCourseID ||= state.courses[0]?.id || null;
       state.lectures = await api("/api/lectures"); state.runtime = await api("/api/state");
+      state.storage = await api("/api/storage");
       if (state.runtime.activeLectureID) { state.currentLectureID = state.runtime.activeLectureID; state.detail = await api(`/api/lectures/${state.runtime.activeLectureID}`); }
       modeNote.textContent = "LOCAL · 127.0.0.1"; document.getElementById("local-state").innerHTML = `<span class="state-lamp"></span><span>本机服务已连接</span>`;
     } catch (error) { state.connected = false; modeNote.textContent = "本机服务未连接"; toast(error.message, true); }
@@ -126,7 +129,7 @@
       <div class="audio-console"><audio id="audio" controls preload="metadata" src="/api/lectures/${lecture.id}/audio?token=${encodeURIComponent(token)}"></audio><span>原始录音 · 仅在本机</span></div>
       <section class="quality-panel"><div><span class="eyebrow">RECOGNITION QUALITY</span><h2>识别质量证据</h2><p>这是 Apple 识别器给出的可信度，不等同于真实准确率；红色片段仍应点击回听。</p></div><div class="quality-cards">${qualityCard("实时确认稿", liveQuality)}${qualityCard("课后复核稿", reviewedQuality)}</div></section>
       <div class="detail-grid"><article class="paper transcript-paper"><header><span class="mono-label">${reviewed.length ? "REVIEWED ENGLISH" : "LIVE ENGLISH"}</span><span>${english.filter(s => s.confidence != null && s.confidence < .55).length} 处待复核</span></header>${english.map(s => `<button class="detail-segment" data-time="${s.startTime}"><time>${fmt(s.startTime)}</time><p>${escapeHTML(s.text)}</p></button>`).join("") || `<p class="list-empty">尚无英文逐字稿。</p>`}</article><article class="paper transcript-paper chinese"><header><span class="mono-label">${corrected.length ? "DEEPSEEK CORRECTED" : "LIVE CHINESE"}</span></header>${zh.map(s => `<div class="detail-segment"><time>${fmt(s.startTime)}</time><p>${escapeHTML(s.text)}</p></div>`).join("") || `<p class="list-empty">尚无中文翻译。</p>`}</article></div>
-      <section class="marker-strip"><span class="mono-label">MARKERS</span>${markers.map(m => `<button data-time="${m.time}">${fmt(m.time)} · ${escapeHTML(m.label)}</button>`).join("") || "没有课堂标记"}</section>${summaries[0] ? `<section class="summary-preview"><span class="eyebrow">LATEST SUMMARY</span><h2>最新学习总结</h2><p>${escapeHTML(summaries[0].content.overview)}</p>${button("打开完整总结", "open-summary", "button-primary")}</section>` : ""}</section>`;
+      <section class="marker-strip"><span class="mono-label">MARKERS</span>${markers.map(m => `<button data-time="${m.time}">${fmt(m.time)} · ${escapeHTML(m.label)}</button>`).join("") || "没有课堂标记"}</section><section class="export-list"><a class="export-action" href="/api/lectures/${lecture.id}/export?token=${encodeURIComponent(token)}" download>${icon("download")}<span>导出 Markdown 学习档案</span><span>仅文字 · 不含 API Key</span></a></section>${summaries[0] ? `<section class="summary-preview"><span class="eyebrow">LATEST SUMMARY</span><h2>最新学习总结</h2><p>${escapeHTML(summaries[0].content.overview)}</p>${button("打开完整总结", "open-summary", "button-primary")}</section>` : ""}</section>`;
     applyPendingAudioJump();
   }
 
@@ -169,7 +172,7 @@
 
   function renderSettings() {
     breadcrumb.textContent = "Lecture / 设置与诊断"; const r = state.runtime;
-    main.innerHTML = `<section class="page settings-page"><header class="page-head"><div><span class="eyebrow">LOCAL DIAGNOSTICS</span><h1>课前，确认一切就绪。</h1><p>Lecture 不提供云端录音，也不会把音频发送给 DeepSeek。</p></div></header><div class="diagnostic-list"><div><span>${icon("mic")}麦克风与本地识别</span><strong>${r.speechAvailable ? "可用" : "首次开课时准备资源"}</strong></div><div><span>${icon("external")}英文 → 简体中文</span><strong>${r.translationAvailable ? "可用" : "首次翻译时下载语言"}</strong></div><div><span>${icon("lock")}DeepSeek API</span><strong>${r.deepSeekConfigured ? "已存入钥匙串" : "尚未配置"}</strong></div><div><span>${icon("database")}本地资料库</span><strong>~/Library/Application Support/Lecture</strong></div></div><section class="accuracy-guide"><div><span class="eyebrow">ACCURACY PROTOCOL</span><h2>四层识别保障</h2></div><ol><li><strong>匹配口音</strong><span>按课程选择教授最接近的英语地区。</span></li><li><strong>专业词模型</strong><span>词汇表实时提示，并在课后生成加权本地语言模型。</span></li><li><strong>完整复核</strong><span>停止录音后用远场长听写重新识别整段音频。</span></li><li><strong>证据可追溯</strong><span>保留原音、时间轴、可信度及实时/复核双版本。</span></li></ol><p>软件不能承诺 100% 正确。要测真实准确率，请用一段已知英文稿计算词错误率（WER）。</p></section><section class="settings-section"><div><span class="eyebrow">MACOS KEYCHAIN</span><h2>DeepSeek 密钥</h2><p>网页只负责提交；密钥由原生助手直接写入 macOS 钥匙串，浏览器不会保存。</p></div><div>${button(r.deepSeekConfigured ? "更换密钥" : "保存密钥", "key", "button-primary")} ${r.deepSeekConfigured ? button("测试连接", "test-key") + button("删除", "delete-key", "button-danger") : ""}</div></section></section>`;
+    main.innerHTML = `<section class="page settings-page"><header class="page-head"><div><span class="eyebrow">LOCAL DIAGNOSTICS</span><h1>课前，确认一切就绪。</h1><p>Lecture 不提供云端录音，也不会把音频发送给 DeepSeek。</p></div></header><div class="diagnostic-list"><div><span>${icon("mic")}麦克风与本地识别</span><strong>${r.speechAvailable ? "可用" : "首次开课时准备资源"}</strong></div><div><span>${icon("external")}英文 → 简体中文</span><strong>${r.translationAvailable ? "可用" : "首次翻译时下载语言"}</strong></div><div><span>${icon("lock")}DeepSeek API</span><strong>${r.deepSeekConfigured ? "已存入钥匙串" : "尚未配置"}</strong></div><div><span>${icon("database")}本地资料库</span><strong>${bytes(state.storage.totalBytes)} · ${state.storage.recordingCount || 0} 份录音</strong></div></div><section class="accuracy-guide"><div><span class="eyebrow">ACCURACY PROTOCOL</span><h2>四层识别保障</h2></div><ol><li><strong>匹配口音</strong><span>按课程选择教授最接近的英语地区。</span></li><li><strong>专业词模型</strong><span>词汇表实时提示，并在课后生成加权本地语言模型。</span></li><li><strong>完整复核</strong><span>停止录音后用远场长听写重新识别整段音频。</span></li><li><strong>证据可追溯</strong><span>保留原音、时间轴、可信度及实时/复核双版本。</span></li></ol><p>软件不能承诺 100% 正确。要测真实准确率，请用一段已知英文稿计算词错误率（WER）。</p></section><section class="settings-section"><div><span class="eyebrow">LOCAL STORAGE</span><h2>本地资料与导出</h2><p>数据目录：~/Library/Application Support/Lecture。每节课堂可从详情页导出 Markdown，录音不会嵌入导出文件。</p></div><strong>${bytes(state.storage.recordingBytes)} 录音 · ${bytes(state.storage.databaseBytes)} 历史库 · ${bytes(state.storage.exportBytes)} 导出</strong></section><section class="settings-section"><div><span class="eyebrow">MACOS KEYCHAIN</span><h2>DeepSeek 密钥</h2><p>网页只负责提交；密钥由原生助手直接写入 macOS 钥匙串，浏览器不会保存。</p></div><div>${button(r.deepSeekConfigured ? "更换密钥" : "保存密钥", "key", "button-primary")} ${r.deepSeekConfigured ? button("测试连接", "test-key") + button("删除", "delete-key", "button-danger") : ""}</div></section></section>`;
   }
 
   async function action(value, source = null) {
@@ -214,6 +217,7 @@
     state.courses = await api("/api/courses");
     state.lectures = await api("/api/lectures");
     state.runtime = await api("/api/state");
+    state.storage = await api("/api/storage");
     if (state.runtime.activeLectureID) {
       state.currentLectureID = state.runtime.activeLectureID;
       state.detail = await api(`/api/lectures/${state.runtime.activeLectureID}`);

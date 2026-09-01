@@ -12,10 +12,12 @@ public protocol LectureRuntimeControlling: Sendable {
     func deleteDeepSeekKey() throws
     func testDeepSeek() async throws -> Bool
     func isDeepSeekConfigured() -> Bool
+    func storageUsage() throws -> LectureStorageUsage
 }
 
 public extension LectureRuntimeControlling {
     func reviewedTranscript(lectureID: String) async throws -> [TranscriptSegment] { [] }
+    func storageUsage() throws -> LectureStorageUsage { LectureStorageUsage() }
 }
 
 public struct RuntimeSnapshot: Codable, Sendable {
@@ -84,6 +86,8 @@ public final class LectureAPIRouter: @unchecked Sendable {
             var snapshot = try runtime.runtimeSnapshot()
             snapshot.deepSeekConfigured = runtime.isDeepSeekConfigured()
             return .json(snapshot)
+        case ("GET", "/api/storage"):
+            return .json(try runtime.storageUsage())
         case ("GET", "/api/courses"):
             let query = request.query["q"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return .json(query.isEmpty ? try repository.listCourses() : try repository.searchCourses(query: query))
@@ -193,6 +197,29 @@ public final class LectureAPIRouter: @unchecked Sendable {
                 }
                 return HTTPResponse(status: 200, headers: headers, body: data)
             }
+            if parts.count == 4, parts[3] == "export", request.method == "GET" {
+                guard let lecture = try repository.lecture(id: id),
+                      let course = try repository.course(id: lecture.courseID) else {
+                    return .jsonError(status: 404, message: "未找到课堂")
+                }
+                let markdown = LectureMarkdownExporter.render(
+                    course: course,
+                    lecture: lecture,
+                    transcripts: try repository.transcripts(lectureID: id, source: nil),
+                    markers: try repository.markers(lectureID: id),
+                    summaries: try repository.summaries(lectureID: id)
+                )
+                let filename = "lecture-\(safeFilename(id)).md"
+                return HTTPResponse(
+                    status: 200,
+                    headers: [
+                        "Content-Type": "text/markdown; charset=utf-8",
+                        "Content-Disposition": "attachment; filename=\"\(filename)\"",
+                        "Cache-Control": "no-store",
+                    ],
+                    body: Data(markdown.utf8)
+                )
+            }
         }
         if parts.count == 4, parts[0] == "api", parts[1] == "courses", parts[3] == "chat", request.method == "GET" {
             return .json(try repository.chatMessages(courseID: parts[2], lectureID: request.query["lectureID"]))
@@ -224,6 +251,12 @@ public final class LectureAPIRouter: @unchecked Sendable {
             end = min(requestedEnd, totalLength - 1)
         }
         return start..<(end + 1)
+    }
+
+    private func safeFilename(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let safe = value.unicodeScalars.map { allowed.contains($0) ? Character(String($0)) : Character("-") }
+        return String(safe)
     }
 
     private func serveStatic(_ path: String) -> HTTPResponse {
